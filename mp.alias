@@ -1,0 +1,177 @@
+embed <drac2>
+# load constants and arguments
+ch = character()
+args = [x for x in &ARGS&]
+ptargs = "&*&"
+n = '\n'
+counter = "xp"
+using(
+    xplib="bd5e6af1-55e9-4c5b-b814-8f9b447091e7",
+    logtools="11743454-0aca-46a6-ad73-9b902a65fbeb",
+)
+cmd = ctx.prefix+ctx.alias
+
+# Load MP name (defaults to "Milestone")
+mp_name = get_svar("mpname") or get("mpname") or "Milestone"
+
+# helper functions
+def print_nice(num: float) -> str:
+    match typeof(num):
+        case "float":
+            return f"{round(num, 2):,}".rstrip("0").rstrip(".")
+        case "int":
+            return f"{num:,}"
+        case _:
+            return num
+
+def ordinal(num: int) -> str:
+    num = int(num)
+    if 10 <= num <= 19:
+        return f"{num}th"
+    match num % 10:
+        case 1: return f"{num}st"
+        case 2: return f"{num}nd"
+        case 3: return f"{num}rd"
+        case _: return f"{num}th"
+
+# define sub commands
+subcs = {'chart': False,'log': False,'set': False,'help?': False,'options': False}
+if args:
+    for subc in subcs.keys():
+        subcs[subc] = subc in args[0].lower() or args[0].lower() in subc
+
+# load xp system data
+totals = xplib.totals()
+xp_name = xplib.xp_name()
+cc_name = xplib.cc_name()
+xp = xplib.get_xp()
+level, required, _ = xplib.level()
+
+# parse value (this is MP input)
+check_args = int(subcs['set']) or ((len(args) > 1) and int(subcs['log']))
+if args and not any(subcs[subc] for subc in ['chart','help?','options']):
+    try:
+        mp_value = float('.'.join(args[check_args].replace(",", "").split('.')[:2]))
+    except:
+        mp_value = None
+else:
+    mp_value = None
+
+# load logs, page number
+page_num = int(mp_value) if mp_value is not None else -1
+page_num = page_num if page_num < 1 else page_num-1
+value = 0 if subcs['log'] else mp_value
+
+# ✅ MP → XP conversion (Iterative, with level changes allowed)
+if value:
+    # Iteratively convert MP → XP one at a time using current level's scaling
+    mp_remaining = value
+    total_xp_gain = 0
+    current_xp = xp
+    current_level = level
+
+    def gap_for_level(lvl):
+        try:
+            req = totals[lvl]
+            prev = totals[lvl-1] if lvl > 0 else 0
+            return req - prev
+        except:
+            return 0
+
+    step = 1 if mp_remaining > 0 else -1
+    while mp_remaining != 0:
+        full_gap = gap_for_level(current_level)
+        xp_step = step * (full_gap * 0.10)
+        total_xp_gain += xp_step
+        current_xp += xp_step
+
+        # Recalculate level after each MP
+        current_level, _, _ = xplib.level(xp=current_xp)
+
+        mp_remaining -= step
+
+    value = round(total_xp_gain, 2)
+
+out = []
+
+# modify XP using converted value
+if value:
+
+    # Prepare compact MP→XP log message
+    xp_display = print_nice(abs(value))
+    mp_display = print_nice(abs(mp_value))
+
+    # sign for the log (+ or -) based on XP change
+    sign = "+" if value > 0 else "-"
+
+    # Extract note text from args (everything after the number)
+    note = " ".join(args[1:]).strip('"').strip() if len(args) > 1 else ""
+
+    # Build the full log text in one string (no trailing semicolon!)
+    if note:
+        log_note = f'{sign}{mp_display} {mp_name.lower()} → {xp_display} {xp_name} "{note}"'
+    else:
+        log_note = f"{sign}{mp_display} {mp_name.lower()} → {xp_display} {xp_name}"
+
+    # Apply XP change and log normally
+    if subcs['set']:
+        total, removed, added = xplib.set_xp(value, log_note, return_added=True)
+    else:
+        total, removed, added = xplib.modify_xp(value, log_note, return_added=True)
+
+    out += logtools.display_log_changes(added=added, removed=removed)
+
+else:
+    total = xp
+
+# determine next level, check ding
+next, next_total, next_needed = xplib.next_lvl()
+ding = next_needed <= 0 if level < len(totals) else False
+
+# ✅ Title that shows MP spent + XP gained
+if mp_value:
+    mp_display = print_nice(abs(mp_value))
+    xp_display = print_nice(abs(value))
+
+    # pluralize mp_name
+    mp_name_used = mp_name if abs(mp_value) == 1 else mp_name + "s"
+
+    # positive MP = gains (not spends)
+    action = "gains" if mp_value > 0 else "loses"
+
+    title = f"{name} {action} {mp_display} {mp_name_used} ({'+' if value>0 else '-'}{xp_display} {xp_name})."
+    if ding:
+        title = title[:-1] + f" and levels up to {ordinal(next)} level!"
+    desc = ""
+elif subcs['log']:
+    title = f"{name} checks their {xp_name} logs."
+    log = logtools.get_log("xplog", ch)
+    page, act_page_num, page_count = logtools.log_page(log, page_num)
+    desc = f"""-desc ＂{page}＂ -f ＂Page {act_page_num+1}/{page_count}|Use `{cmd} log #` to view another page.＂"""
+elif subcs['chart']:
+    title = f"{name} checks the level chart!"
+    desc = f"""-desc ＂{"`"*3}py{n}Level | Required {xp_name}{n}{"-"*(17+len(xp_name))}{n}{n.join([f"{len(totals) - totals[::-1].index(x):5} | {x}" for x in list(dict.fromkeys(totals))])}{"`"*3}＂"""
+elif subcs['help?']:
+    title = f"{name} wants help with {mp_name}!"
+    desc = f"""-desc ＂`{cmd} # [notes]` - Spend {mp_name} to gain XP automatically.
+`{cmd} -# [notes]` - Remove XP by reversing {mp_name}.
+`{cmd} set #` - Sets XP to the equivalent of the provided {mp_name} amount.
+All other behavior matches the `xp` alias.＂"""
+elif subcs['options']:
+    title = f"{name} checks {mp_name} options."
+    desc = f"""-desc ＂Use cvar/svar `mpname` to rename {mp_name}. Default: Milestone.＂"""
+else:
+    title = f"{name} is currently {ordinal(level)} level!"
+    desc = ""
+
+out.append(f"-title ＂{title}＂")
+out.append(desc)
+next = next+ding
+if not (subcs['chart'] or subcs['log'] or subcs['help?'] or subcs['options']):
+    out.append(f'''-f "Current {xp_name}|{print_nice(total)}"''')
+    if next > level:
+        out.append(f'-f "Next Level: {next}|{print_nice(next_total)} *({print_nice(next_needed)} remaining)*"')
+out.append(f"-footer '{cmd} | {cmd} # | {cmd} -# | {cmd} set # | {cmd} chart | {cmd} log | {cmd} help | {cmd} options'")
+return ' '.join(out)
+</drac2>
+-color <color> -thumb <image>

@@ -1,0 +1,5 @@
+embed <drac2>
+ch = character()
+out = f'-title "Test" -desc "{ch.levels.get("Illrigger")}"'
+return out
+</drac2>

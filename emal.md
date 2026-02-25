@@ -1,0 +1,1 @@
+Embolden Allies from Illrigger. To use, the format must be: "!emal -t name|amount -t name|amount"

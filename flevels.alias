@@ -1,0 +1,5 @@
+embed <drac2>
+# ch = get("PaladinLevel", 4)
+defUnusedVarNameElsewhereForSure = 3
+return f'-title "Embolden Allies" -desc "TEST WORDS Total healing exceeds {defUnusedVarNameElsewhereForSure}."'
+<drac2>

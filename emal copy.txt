@@ -1,0 +1,91 @@
+embed <drac2>
+cc = "Embolden Allies"
+ch = character()
+lvl = ch.levels.get("Illrigger") or 0
+heal_total = lvl * 5
+
+# Check CC exists
+if not ch.cc_exists(cc):
+    return f'-title "Error" -desc "Counter \'{cc}\' does not exist. Run: `!cc create \\\"{cc}\\\" -max 1 -min 0 -reset short -type bubble`"'
+
+# Check CC uses
+if ch.get_cc(cc) <= 0:
+    return f'-title "Embolden Allies" -desc "You have no uses remaining!"'
+
+parse, c = argparse(&ARGS&), combat()
+rawTargets = parse.get('t') if parse.get('t') else []
+fullData = []
+troubleshootingData = []
+
+# Loop through rawTargets and build objects mapping combatant->number
+for rt in rawTargets:
+	# Split the raw target on the first '|' into name (before) and num_s (after)
+	if '|' in rt:
+		name, num_s = rt.split('|', 1)
+	else:
+		name, num_s = rt, None
+
+	# Resolve the name to a combatant object using get_combatant
+	combatant = c.get_combatant(name)
+
+	# Convert the number part to int when possible, otherwise keep raw
+	try:
+		num = int(num_s) if num_s is not None else None
+	except:
+		num = num_s
+
+	# Create an object with the combatant (or raw name if unresolved) as key
+	# and the parsed number as its value, then append to fullData
+	key = combatant if combatant else name
+	fullData.append({key: num})
+
+# Sum all numeric values from fullData to enforce heal_total limits
+total_requested = 0
+for entry in fullData:
+	for k, v in entry.items():
+		try:
+			if v is not None:
+				total_requested += int(v)
+		except:
+			# Ignore non-numeric values
+			pass
+
+# If the requested total exceeds what the character can provide, return an error
+if total_requested > heal_total:
+	return f'-title "Embolden Allies Error" -desc "Requested total healing of {total_requested} exceeds your maximum heal total of {heal_total}."'
+
+outputData = []
+resultData = ""
+
+# Loop through all objects in fullData
+# For each object: extract key (combatant or name) and value (number)
+# Use the key as the object to call .damage() on (no effects for now)
+# Append the result of that call to outputData
+for obj in fullData:
+	# obj is expected to be a single-key dict mapping combatant_or_name -> number
+	for key, val in obj.items():
+		# Try to call .damage() on the key; if it fails, store a helpful message
+		try:
+			res = key.damage(dice_str=f'-{val}[healing]', overheal=False)
+		except:
+			res = f"Unresolved or no .damage() on target: {key}"
+
+		# Append the damage result (or message) to outputData
+		outputData.append(res)
+	resultData += f"{key} (+{-res.total} HP)\n"
+
+troubleshootingData.append(f"{ch.name}")
+
+
+# Consume the CC
+ch.mod_cc(cc, -1)
+
+# Build embed
+desc = "As a bonus action, you restore a total number of hit points equal to five times your illrigger level, divided however you choose between yourself and other creatures within 30 feet of you."
+desc += f'\n\n**{cc}**\n{ch.cc_str(cc)} (-1)'
+footer = f'\n\n{resultData}'
+
+out = f'-title "{ch.name} Emboldens their Allies!" -desc "{desc}" -footer "{footer}" -image "{ch.image}"'
+
+return out
+</drac2>

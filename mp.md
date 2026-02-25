@@ -1,0 +1,1 @@
+1 mp is equivalent to 10% of the xp needed to take you from your last level to your next one. 10 mp will always be exactly one level-up. Mp is applied one at a time to raise the xp value of the rest of the mp if one of them levels you up.
