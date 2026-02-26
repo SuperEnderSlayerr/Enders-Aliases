@@ -1,0 +1,11 @@
+embed
+<drac2>
+anomalies = load_json(get_gvar('76a9f232-c36e-498d-9369-ad4b769318f5'))
+rroll = vroll("1d100")
+index = (rroll.total - 1) // 2
+result = anomalies[index]
+</drac2>
+-title "Arcane Anomaly!"
+-thumb https://media.dndbeyond.com/compendium-images/modr/i21BweaGcBC4zPih/08-12.fractal-lepidopteras.png
+-desc "{{result}}"
+-footer "Rolled a {{rroll.total}}"

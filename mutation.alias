@@ -1,0 +1,14 @@
+embed <drac2>
+cc = "Contamination"
+ch = character()
+value = ch.cc_exists(cc) and ch.get_cc(cc)
+contam = ch.get_cc(cc)
+number = vroll('1d6').total
+if number <= contam:
+  field = f' -f "Mutation roll on mutation chart" '
+else:  field = f''' -f  "{name} is safe from mutation this level" ''' 
+return f""" -title "{name} rolled a {number}" \n{field} """
+</drac2>
+-color <color>
+-thumb <image>
+-footer {{ctx.prefix+ctx.alias}}

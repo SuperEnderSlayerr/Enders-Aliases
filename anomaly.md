@@ -1,0 +1,1 @@
+This will roll a random Arcane Anomaly effect! It does not include automation for the effects rolled

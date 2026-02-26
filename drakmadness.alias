@@ -1,0 +1,11 @@
+embed
+<drac2>
+drakmad = load_json(get_gvar('75ac4e8e-1243-4b85-8647-23e2c605c365'))
+rroll = vroll("1d10")
+index = (rroll.total - 1)
+result = drakmad[index]
+</drac2>
+-title "Random Drakkenheim Madness!"
+-thumb https://media.dndbeyond.com/compendium-images/modr/i21BweaGcBC4zPih/11-05.storm-troll.png
+-desc "{{result}}"
+-footer "Rolled a {{rroll.total}}"

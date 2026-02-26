@@ -1,0 +1,1 @@
+This will roll a d6 and compare the result to your Contamination levels, if you have such a CC. If you do, it will tell you if you are safe this roll or not.

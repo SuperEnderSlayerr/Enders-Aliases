@@ -1,0 +1,1 @@
+This will roll a random Drakkenhaim Madness effect. It does not include automation for the effects rolled

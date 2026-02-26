@@ -1,0 +1,25 @@
+embed <drac2>
+a = &ARGS&
+p = argparse(a)
+cc = "Contamination"
+ch = character()
+value = ch.cc_exists(cc) and ch.get_cc(cc)
+contam = ch.get_cc(cc)
+r=vroll('1d20')
+mut = ...
+mutation = mut[r.total-1]
+
+#  handle clearing the cvar
+if "&1&".lower() == 'clear':
+  ch.delete_cvar('mutationHistory')
+  # this return stops the rest of the code from processing
+  return f""" -title "You cleared your Mutations!" -desc "More text here maybe." """
+
+#  set the history variable and default in one function
+history = ch.get_cvar('mutationHistory', f' 0 First Mutation ')
+   ch.set_cvar_nx('mutationHistory', mutation)
+ch.set_cvar('mutationHistory', history +
+ mutation)
+return f''' -title "{name.replace('"','')}'s Known Mutations are:" \n -f "{history}" \n -f "Roll:  Current Mutation is {mutation}" -desc \n"Current Contamination Level: {contam}" '''
+</drac2>
+-footer {{ctx.prefix+ctx.alias}} -color <color> -thumb <image>

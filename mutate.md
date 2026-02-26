@@ -1,0 +1,1 @@
+This will roll the d100 for the mutations table for Contamination. It does not include automation for the results
