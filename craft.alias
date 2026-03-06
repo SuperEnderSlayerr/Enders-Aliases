@@ -1,1 +1,191 @@
-echo The `craft` alias does not have an active code version. Please contact the collection author, or if you are the author, create or select an active code version on the Alias Workshop.
+embed
+<drac2>
+# !craft outline
+# Inputs: !craft rarity p/c name tool adv g
+
+using(
+	cooldownlib = "cc413a98-489e-49f9-aac2-907993761792"
+)
+
+args = &ARGS&
+ch = character()
+
+FOOTER = "!craft ? | @superenderslayer"
+thumb = f' -thumb "{ch.image}"' if ch.image else ''
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def q(s):
+	return (s or "").replace("\"", "'")
+
+def build(title, desc_lines=None, fields=None):
+	desc = "\n".join(desc_lines or [])
+	out = [
+		f'-title "{q(title)}"',
+		f'-desc "{q(desc)}"',
+		f'-footer "{FOOTER}"',
+	]
+	if thumb:
+		out.append(thumb)
+	for n, v in (fields or []):
+		if v:
+			out.append(f'-f "{q(n)}|{q(v)}"')
+	return " ".join(out)
+
+def norm_rarity(s):
+	s = (s or "").lower().replace("_", " ").replace("-", " ").strip()
+	if s in ["veryrare", "very rare", "vr"]:
+		return "very rare"
+	if s in ["nonmagical", "non magical", "mundane", "nm"]:
+		return "nonmagical"
+	return s
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+RARITY_TABLE = {
+	"nonmagical": {"dc": 10, "successes": 2},
+	"common": {"dc": 15, "successes": 4},
+	"uncommon": {"dc": 18, "successes": 6},
+	"rare": {"dc": 21, "successes": 8},
+	"very rare": {"dc": 24, "successes": 32},
+}
+
+COOLDOWN_SECONDS = 2 * 60 * 60
+
+# ---------------------------------------------------------------------------
+# Parse args
+# ---------------------------------------------------------------------------
+
+if (not args) or (args[0].lower() in ["help", "?"]):
+	return build(
+		"Craft Help",
+		[
+			"**Usage**",
+			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g]`",
+			"",
+			"**Inputs**",
+			"- `rarity`: nonmagical | common | uncommon | rare | very rare",
+			"- `p/c`: permanent or consumed (consumed halves required checks)",
+			"- `name`: item name (single token for now)",
+			"- `tool`: tool or skill name",
+			"- `adv|dis`: optional advantage/disadvantage",
+			"- `g`: optional guidance",
+			"",
+			"**Notes**",
+			"- Checks have a 2-hour cooldown.",
+		],
+	)
+
+if len(args) < 4:
+	return build(
+		"Craft Error",
+		[
+			"Not enough arguments.",
+			"Use `!craft ?` for usage.",
+		],
+	)
+
+rarity_key = norm_rarity(args[0])
+prof_flag = args[1].lower()
+item_name = args[2]
+tool_name = args[3]
+adv_flag = args[4].lower() if len(args) > 4 else ""
+g_flag = args[5].lower() if len(args) > 5 else ""
+
+if len(args) > 6:
+	return build(
+		"Craft Error",
+		[
+			"Too many arguments.",
+			"Use `!craft ?` for usage.",
+		],
+	)
+
+if prof_flag not in ["p", "c"]:
+	return build(
+		"Craft Error",
+		[
+			"Second argument must be `p` (permanent) or `c` (consumed).",
+			"Use `!craft ?` for usage.",
+		],
+	)
+
+if adv_flag and adv_flag not in ["adv", "dis", "a", "d"]:
+	return build(
+		"Craft Error",
+		[
+			"Advantage flag must be `adv` or `dis`.",
+			"Use `!craft ?` for usage.",
+		],
+	)
+
+if g_flag and g_flag not in ["g", "guidance"]:
+	return build(
+		"Craft Error",
+		[
+			"Guidance flag must be `g`.",
+			"Use `!craft ?` for usage.",
+		],
+	)
+
+rarity = RARITY_TABLE.get(rarity_key)
+if not rarity:
+	return build(
+		"Craft Error",
+		[
+			f"Unknown rarity: `{args[0]}`",
+			"Use `!craft ?` for valid rarities.",
+		],
+	)
+
+dc = rarity["dc"]
+required = rarity["successes"]
+
+if prof_flag == "c":
+	required = max(1, (required + 1) // 2)
+
+# ---------------------------------------------------------------------------
+# Outline steps (to be implemented)
+# ---------------------------------------------------------------------------
+
+# TODO: Determine how tool/skill checks are rolled in your server rules.
+# TODO: Decide if `adv`/`dis` and `g` adjust the roll or add dice.
+# TODO: Decide if cooldown is per-item, per-tool, or global.
+# TODO: Decide where to store progress (cvar or gvar).
+
+# Example cooldown gate (uncomment after setting the GVAR id above):
+# cd = Cooldowns()
+# key = f"craft:{item_name.lower()}"
+# gate = cd.gate(key, COOLDOWN_SECONDS)
+# if not gate.ok:
+#     when = cd.format_window(gate.expiry)
+#     return build("Craft Cooldown", [f"Try again {when}."])
+# cd.save()
+
+# Example progress store (outline):
+# state = load_json(get_cvar("craft_progress", "{}"))
+# prog = state.get(key, {"successes": 0, "required": required, "dc": dc})
+# success = roll_total >= dc
+# if success:
+#     prog["successes"] += 1
+#     state[key] = prog
+#     set_cvar("craft_progress", dump_json(state))
+
+return build(
+	"Craft Outline",
+	[
+		f"Rarity: **{rarity_key}** (DC {dc}, {required} successes)",
+		f"Item type: **{'permanent' if prof_flag == 'p' else 'consumed'}**",
+		f"Item: **{item_name}**",
+		f"Tool: **{tool_name}**",
+		f"Advantage: **{adv_flag or 'none'}**",
+		f"Guidance: **{g_flag or 'none'}**",
+		"",
+		"This alias is an outline only. Fill in the TODO sections to complete it.",
+	],
+)
+</drac2>
