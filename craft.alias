@@ -4,35 +4,14 @@ embed
 # Inputs: !craft rarity p/c name tool adv g
 
 using(
-	cooldownlib = "cc413a98-489e-49f9-aac2-907993761792"
+	cooldownlib = "cc413a98-489e-49f9-aac2-907993761792",
+	gatherlib = "6d152ad4-045e-4e48-92c4-820929143039"
 )
 
 args = &ARGS&
 ch = character()
 
 FOOTER = "!craft ? | @superenderslayer"
-thumb = f' -thumb "{ch.image}"' if ch.image else ''
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def q(s):
-	return (s or "").replace("\"", "'")
-
-def build(title, desc_lines=None, fields=None):
-	desc = "\n".join(desc_lines or [])
-	out = [
-		f'-title "{q(title)}"',
-		f'-desc "{q(desc)}"',
-		f'-footer "{FOOTER}"',
-	]
-	if thumb:
-		out.append(thumb)
-	for n, v in (fields or []):
-		if v:
-			out.append(f'-f "{q(n)}|{q(v)}"')
-	return " ".join(out)
 
 def norm_rarity(s):
 	s = (s or "").lower().replace("_", " ").replace("-", " ").strip()
@@ -49,19 +28,20 @@ def norm_rarity(s):
 RARITY_TABLE = {
 	"nonmagical": {"dc": 10, "successes": 2},
 	"common": {"dc": 15, "successes": 4},
-	"uncommon": {"dc": 18, "successes": 6},
-	"rare": {"dc": 21, "successes": 8},
+	"uncommon": {"dc": 18, "successes": 8},
+	"rare": {"dc": 21, "successes": 16},
 	"very rare": {"dc": 24, "successes": 32},
 }
 
-COOLDOWN_SECONDS = 2 * 60 * 60
+# COOLDOWN_SECONDS = 2 * 60 * 60
+COOLDOWN_SECONDS = 10  # for testing
 
 # ---------------------------------------------------------------------------
 # Parse args
 # ---------------------------------------------------------------------------
 
 if (not args) or (args[0].lower() in ["help", "?"]):
-	return build(
+	return gatherlib.build_output(
 		"Craft Help",
 		[
 			"**Usage**",
@@ -76,17 +56,20 @@ if (not args) or (args[0].lower() in ["help", "?"]):
 			"- `g`: optional guidance",
 			"",
 			"**Notes**",
-			"- Checks have a 2-hour cooldown.",
+			f"- Checks have a {COOLDOWN_SECONDS} second cooldown.",
+			"- Progress is tracked in a recipe-specific custom counter (CC).",
 		],
+		footer=FOOTER,
 	)
 
 if len(args) < 4:
-	return build(
+	return gatherlib.build_output(
 		"Craft Error",
 		[
 			"Not enough arguments.",
 			"Use `!craft ?` for usage.",
 		],
+		footer=FOOTER,
 	)
 
 rarity_key = norm_rarity(args[0])
@@ -97,49 +80,54 @@ adv_flag = args[4].lower() if len(args) > 4 else ""
 g_flag = args[5].lower() if len(args) > 5 else ""
 
 if len(args) > 6:
-	return build(
+	return gatherlib.build_output(
 		"Craft Error",
 		[
 			"Too many arguments.",
 			"Use `!craft ?` for usage.",
 		],
+		footer=FOOTER,
 	)
 
 if prof_flag not in ["p", "c"]:
-	return build(
+	return gatherlib.build_output(
 		"Craft Error",
 		[
 			"Second argument must be `p` (permanent) or `c` (consumed).",
 			"Use `!craft ?` for usage.",
 		],
+		footer=FOOTER,
 	)
 
 if adv_flag and adv_flag not in ["adv", "dis", "a", "d"]:
-	return build(
+	return gatherlib.build_output(
 		"Craft Error",
 		[
 			"Advantage flag must be `adv` or `dis`.",
 			"Use `!craft ?` for usage.",
 		],
+		footer=FOOTER,
 	)
 
 if g_flag and g_flag not in ["g", "guidance"]:
-	return build(
+	return gatherlib.build_output(
 		"Craft Error",
 		[
 			"Guidance flag must be `g`.",
 			"Use `!craft ?` for usage.",
 		],
+		footer=FOOTER,
 	)
 
 rarity = RARITY_TABLE.get(rarity_key)
 if not rarity:
-	return build(
+	return gatherlib.build_output(
 		"Craft Error",
 		[
 			f"Unknown rarity: `{args[0]}`",
 			"Use `!craft ?` for valid rarities.",
 		],
+		footer=FOOTER,
 	)
 
 dc = rarity["dc"]
@@ -149,43 +137,124 @@ if prof_flag == "c":
 	required = max(1, (required + 1) // 2)
 
 # ---------------------------------------------------------------------------
-# Outline steps (to be implemented)
+# Cooldown check
 # ---------------------------------------------------------------------------
 
-# TODO: Determine how tool/skill checks are rolled in your server rules.
-# TODO: Decide if `adv`/`dis` and `g` adjust the roll or add dice.
-# TODO: Decide if cooldown is per-item, per-tool, or global.
-# TODO: Decide where to store progress (cvar or gvar).
+cd = cooldownlib.Cooldowns()
+cd_key = f"craft:{item_name.lower()}:{tool_name.lower()}:cd{COOLDOWN_SECONDS}"
+gate = cd.gate(cd_key, COOLDOWN_SECONDS, set_on_pass=False)
 
-# Example cooldown gate (uncomment after setting the GVAR id above):
-# cd = Cooldowns()
-# key = f"craft:{item_name.lower()}"
-# gate = cd.gate(key, COOLDOWN_SECONDS)
-# if not gate.ok:
-#     when = cd.format_window(gate.expiry)
-#     return build("Craft Cooldown", [f"Try again {when}."])
-# cd.save()
+if not gate.ok:
+	when = cd.format_window(gate.expiry)
+	return gatherlib.build_output(
+		"Craft Cooldown",
+		[
+			"You are still focusing on your previous crafting attempt.",
+			f"Try again {when}.",
+		],
+		footer=FOOTER,
+	)
 
-# Example progress store (outline):
-# state = load_json(get_cvar("craft_progress", "{}"))
-# prog = state.get(key, {"successes": 0, "required": required, "dc": dc})
-# success = roll_total >= dc
-# if success:
-#     prog["successes"] += 1
-#     state[key] = prog
-#     set_cvar("craft_progress", dump_json(state))
+# ---------------------------------------------------------------------------
+# Load progress from custom counter (CC)
+# ---------------------------------------------------------------------------
 
-return build(
-	"Craft Outline",
-	[
-		f"Rarity: **{rarity_key}** (DC {dc}, {required} successes)",
-		f"Item type: **{'permanent' if prof_flag == 'p' else 'consumed'}**",
-		f"Item: **{item_name}**",
-		f"Tool: **{tool_name}**",
-		f"Advantage: **{adv_flag or 'none'}**",
-		f"Guidance: **{g_flag or 'none'}**",
-		"",
-		"This alias is an outline only. Fill in the TODO sections to complete it.",
-	],
+cc_name = f"craft:{item_name.lower()}:{tool_name.lower()}:{rarity_key}:{prof_flag}"
+
+if not ch.cc_exists(cc_name):
+	created = False
+	try:
+		ch.create_cc_nx(cc_name, minVal=0, maxVal=required, reset=None, dispType="bubble")
+		created = True
+	except:
+		try:
+			create_cc_nx(cc_name, 0, required, None, "bubble")
+			created = True
+		except:
+			created = False
+
+	if not created:
+		return gatherlib.build_output(
+			"Craft Setup Required",
+			[
+				"Could not auto-create the custom counter for this recipe.",
+				f"Create CC: `{cc_name}`",
+				f"Set min 0 and max {required}.",
+			],
+			footer=FOOTER,
+		)
+
+try:
+	progress_now = int(ch.get_cc(cc_name))
+except:
+	progress_now = 0
+try:
+	if progress_now < 0:
+		progress_now = 0
+		ch.set_cc(cc_name, 0)
+	except:
+	pass
+
+progress_now = max(0, progress_now)
+
+# ---------------------------------------------------------------------------
+# Roll check using GatherLib's extraction best (tool vs skill)
+# ---------------------------------------------------------------------------
+
+use_adv = adv_flag in ["adv", "a"]
+use_dis = adv_flag in ["dis", "d"]
+use_guidance = g_flag in ["g", "guidance"]
+
+# roll_extraction_best intelligently picks the best tool/skill check
+extract_result = gatherlib.roll_extraction_best(
+	ch,
+	adv=use_adv,
+	dis=use_dis,
+	guidance=use_guidance,
+	tool_name=tool_name,
+	tool_ability="str",
+	skill_name="arcana",
+	prefer_tools_on_tie=True
+)
+
+roll_total = extract_result["roll"].total
+check_method = extract_result["name"]
+roll_breakdown = f"{extract_result['roll']}"
+
+# ---------------------------------------------------------------------------
+# Check result
+# ---------------------------------------------------------------------------
+
+success = roll_total >= dc
+
+if success:
+	progress_now = min(required, progress_now + 1)
+	ch.set_cc(cc_name, progress_now)
+
+# Only set cooldown and display after processing
+if success:
+	cd.gate(cd_key, COOLDOWN_SECONDS, set_on_pass=True)
+	cd.save()
+
+output_lines = [
+	f"{check_method}",
+	roll_breakdown,
+	"",
+	f"Result: {'✓ Success' if success else '✗ Failed'} (DC {dc})",
+	f"Progress: {progress_now}/{required} successes",
+	f"CC: {cc_name}",
+]
+
+if progress_now >= required:
+	output_lines.append("")
+	output_lines.append(f"🎉 **Item complete!** Your **{item_name}** is ready!")
+	ch.set_cc(cc_name, 0)
+elif success:
+	output_lines.append(f"Ready for another check {cd.format_remaining(COOLDOWN_SECONDS)}.")
+
+return gatherlib.build_output(
+	f"Craft Check - {item_name}",
+	output_lines,
+	footer=FOOTER,
 )
 </drac2>
