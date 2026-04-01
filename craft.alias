@@ -57,7 +57,6 @@ if (not args) or (args[0].lower() in ["help", "?"]):
 			"",
 			"**Notes**",
 			f"- Checks have a {COOLDOWN_SECONDS} second cooldown.",
-			"- Progress is tracked in a recipe-specific custom counter (CC).",
 		],
 		footer=FOOTER,
 	)
@@ -156,46 +155,18 @@ if not gate.ok:
 	)
 
 # ---------------------------------------------------------------------------
-# Load progress from custom counter (CC)
+# Load or initialize progress
 # ---------------------------------------------------------------------------
 
-cc_name = f"craft:{item_name.lower()}:{tool_name.lower()}:{rarity_key}:{prof_flag}"
-
-if not ch.cc_exists(cc_name):
-	created = False
-	try:
-		ch.create_cc_nx(cc_name, minVal=0, maxVal=required, reset=None, dispType="bubble")
-		created = True
-	except:
-		try:
-			create_cc_nx(cc_name, 0, required, None, "bubble")
-			created = True
-		except:
-			created = False
-
-	if not created:
-		return gatherlib.build_output(
-			"Craft Setup Required",
-			[
-				"Could not auto-create the custom counter for this recipe.",
-				f"Create CC: `{cc_name}`",
-				f"Set min 0 and max {required}.",
-			],
-			footer=FOOTER,
-		)
-
-try:
-	progress_now = int(ch.get_cc(cc_name))
-except:
-	progress_now = 0
-try:
-	if progress_now < 0:
-		progress_now = 0
-		ch.set_cc(cc_name, 0)
-	except:
-	pass
-
-progress_now = max(0, progress_now)
+prog_key = f"craft:{item_name.lower()}:{tool_name.lower()}"
+state = load_json(ch.get_cvar("craft_progress", "{}"))
+prog = state.get(prog_key, {
+	"successes": 0,
+	"required": required,
+	"dc": dc,
+	"rarity": rarity_key,
+	"item_type": prof_flag,
+})
 
 # ---------------------------------------------------------------------------
 # Roll check using GatherLib's extraction best (tool vs skill)
@@ -228,8 +199,11 @@ roll_breakdown = f"{extract_result['roll']}"
 success = roll_total >= dc
 
 if success:
-	progress_now = min(required, progress_now + 1)
-	ch.set_cc(cc_name, progress_now)
+	prog["successes"] += 1
+
+# Update state in cvar regardless (to track attempts)
+state[prog_key] = prog
+ch.set_cvar("craft_progress", dump_json(state))
 
 # Only set cooldown and display after processing
 if success:
@@ -241,14 +215,14 @@ output_lines = [
 	roll_breakdown,
 	"",
 	f"Result: {'✓ Success' if success else '✗ Failed'} (DC {dc})",
-	f"Progress: {progress_now}/{required} successes",
-	f"CC: {cc_name}",
+	f"Progress: {prog['successes']}/{prog['required']} successes",
 ]
 
-if progress_now >= required:
+if prog["successes"] >= prog["required"]:
 	output_lines.append("")
 	output_lines.append(f"🎉 **Item complete!** Your **{item_name}** is ready!")
-	ch.set_cc(cc_name, 0)
+	state.pop(prog_key, None)
+	ch.set_cvar("craft_progress", dump_json(state))
 elif success:
 	output_lines.append(f"Ready for another check {cd.format_remaining(COOLDOWN_SECONDS)}.")
 

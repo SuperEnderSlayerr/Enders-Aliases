@@ -1,0 +1,28 @@
+multiline <drac2>
+min_minutes = 0.5
+max_minutes = 15
+rounds_per_minute = 10
+
+min_val = int(min_minutes * rounds_per_minute)
+max_val = int(max_minutes * rounds_per_minute)
+
+result = vroll(f"1d{max_val - min_val + 1}").total + min_val - 1
+total_seconds = result * 6
+minutes = total_seconds // 60
+seconds = total_seconds % 60
+
+if minutes == 1:
+	minute_label = "minute"
+else:
+	minute_label = "minutes"
+
+if seconds == 1:
+	second_label = "second"
+else:
+	second_label = "seconds"
+
+message = f"It took {minutes} {minute_label} and {seconds} {second_label} to find your next hunt!"
+</drac2>
+!i skipround {{result}}
+!i shuffle
+!echo {{message}}
