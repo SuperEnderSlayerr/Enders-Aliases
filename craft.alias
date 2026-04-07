@@ -45,7 +45,7 @@ if (not args) or (args[0].lower() in ["help", "?"]):
 		"Craft Help",
 		[
 			"**Usage**",
-			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g]`",
+			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g] [-b <number|die>]`",
 			"",
 			"**Inputs**",
 			"- `rarity`: nonmagical | common | uncommon | rare | very rare",
@@ -54,6 +54,7 @@ if (not args) or (args[0].lower() in ["help", "?"]):
 			"- `tool`: tool or skill name",
 			"- `adv|dis`: optional advantage/disadvantage",
 			"- `g`: optional guidance",
+			"- `-b <number|die>`: optional bonus (e.g. `-b 2`, `-b d4`)",
 			"",
 			"**Notes**",
 			f"- Checks have a {COOLDOWN_SECONDS} second cooldown.",
@@ -75,14 +76,85 @@ rarity_key = norm_rarity(args[0])
 prof_flag = args[1].lower()
 item_name = args[2]
 tool_name = args[3]
-adv_flag = args[4].lower() if len(args) > 4 else ""
-g_flag = args[5].lower() if len(args) > 5 else ""
 
-if len(args) > 6:
+opt_tokens = args[4:]
+use_adv = False
+use_dis = False
+use_guidance = False
+bonus_expr = ""
+
+i = 0
+while i < len(opt_tokens):
+	token = opt_tokens[i].lower()
+
+	if token in ["adv", "a"]:
+		use_adv = True
+		i += 1
+		continue
+
+	if token in ["dis", "d"]:
+		use_dis = True
+		i += 1
+		continue
+
+	if token in ["g", "guidance"]:
+		use_guidance = True
+		i += 1
+		continue
+
+	if token == "-b":
+		if bonus_expr:
+			return gatherlib.build_output(
+				"Craft Error",
+				[
+					"Bonus option `-b` can only be used once.",
+					"Use `!craft ?` for usage.",
+				],
+				footer=FOOTER,
+			)
+
+		if i + 1 >= len(opt_tokens):
+			return gatherlib.build_output(
+				"Craft Error",
+				[
+					"Missing value after `-b`.",
+					"Use `!craft ?` for usage.",
+				],
+				footer=FOOTER,
+			)
+
+		bonus_raw = opt_tokens[i + 1].lower()
+		if bonus_raw.replace("-", "", 1).isdigit():
+			bonus_expr = bonus_raw
+		elif bonus_raw.startswith("d") and bonus_raw[1:].isdigit():
+			bonus_expr = f"1{bonus_raw}"
+		else:
+			return gatherlib.build_output(
+				"Craft Error",
+				[
+					"Bonus after `-b` must be a number or die size (example: `2` or `d4`).",
+					"Use `!craft ?` for usage.",
+				],
+				footer=FOOTER,
+			)
+
+		i += 2
+		continue
+
 	return gatherlib.build_output(
 		"Craft Error",
 		[
-			"Too many arguments.",
+			f"Unknown option: `{opt_tokens[i]}`",
+			"Use `!craft ?` for usage.",
+		],
+		footer=FOOTER,
+	)
+
+if use_adv and use_dis:
+	return gatherlib.build_output(
+		"Craft Error",
+		[
+			"You cannot use both advantage and disadvantage.",
 			"Use `!craft ?` for usage.",
 		],
 		footer=FOOTER,
@@ -93,26 +165,6 @@ if prof_flag not in ["p", "c"]:
 		"Craft Error",
 		[
 			"Second argument must be `p` (permanent) or `c` (consumed).",
-			"Use `!craft ?` for usage.",
-		],
-		footer=FOOTER,
-	)
-
-if adv_flag and adv_flag not in ["adv", "dis", "a", "d"]:
-	return gatherlib.build_output(
-		"Craft Error",
-		[
-			"Advantage flag must be `adv` or `dis`.",
-			"Use `!craft ?` for usage.",
-		],
-		footer=FOOTER,
-	)
-
-if g_flag and g_flag not in ["g", "guidance"]:
-	return gatherlib.build_output(
-		"Craft Error",
-		[
-			"Guidance flag must be `g`.",
 			"Use `!craft ?` for usage.",
 		],
 		footer=FOOTER,
@@ -169,28 +221,49 @@ prog = state.get(prog_key, {
 })
 
 # ---------------------------------------------------------------------------
-# Roll check using GatherLib's extraction best (tool vs skill)
+# Roll check using GatherLib extraction for the specified tool only
 # ---------------------------------------------------------------------------
 
-use_adv = adv_flag in ["adv", "a"]
-use_dis = adv_flag in ["dis", "d"]
-use_guidance = g_flag in ["g", "guidance"]
+# Force a tool-only roll so no skill (including Arcana) can override.
+ability_keys = ["str", "dex", "con", "int", "wis", "cha"]
+best_ability = "int"
+best_score = -999
 
-# roll_extraction_best intelligently picks the best tool/skill check
-extract_result = gatherlib.roll_extraction_best(
+for a in ability_keys:
+	score_val = None
+	try:
+		score_val = int(getattr(ch.stats, a).value)
+	except:
+		try:
+			score_val = int(getattr(ch.stats, a).score)
+		except:
+			try:
+				score_val = int(ch.stats.get_mod(a))
+			except:
+				score_val = None
+
+	if score_val is not None and score_val > best_score:
+		best_score = score_val
+		best_ability = a
+
+tool_tier = gatherlib.tool_tier_from_cvars(ch, tool_name)
+tool_expr, base_roll = gatherlib.roll_tool_check_str(
 	ch,
+	tool_tier,
 	adv=use_adv,
 	dis=use_dis,
 	guidance=use_guidance,
-	tool_name=tool_name,
-	tool_ability="str",
-	skill_name="arcana",
-	prefer_tools_on_tie=True
+	ability=best_ability
 )
 
-roll_total = extract_result["roll"].total
-check_method = extract_result["name"]
-roll_breakdown = f"{extract_result['roll']}"
+roll_total = base_roll.total
+check_method = f"{tool_name.title()} ({best_ability.upper()})"
+roll_breakdown = f"{base_roll}"
+
+if bonus_expr:
+	bonus_roll = vroll(bonus_expr)
+	roll_total += bonus_roll.total
+	roll_breakdown = f"{base_roll} + {bonus_roll}"
 
 # ---------------------------------------------------------------------------
 # Check result
