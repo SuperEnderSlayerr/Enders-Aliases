@@ -1,1 +1,1 @@
-Progresses initiative by a random amount of time between 30 seconds and 15 minutes.
+Progresses initiative by a random amount of time between 30 seconds and 15 minutes, shuffles init, and then states how much time passed.

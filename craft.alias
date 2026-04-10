@@ -40,7 +40,12 @@ COOLDOWN_SECONDS = 10  # for testing
 # Parse args
 # ---------------------------------------------------------------------------
 
-if (not args) or (args[0].lower() in ["help", "?"]):
+state = load_json(ch.get_cvar("craft_progress", "{}"))
+active_prog_key = ch.get_cvar("craft_active", "")
+is_resume = False
+prog_key = ""
+
+if args and (args[0].lower() in ["help", "?"]):
 	return gatherlib.build_output(
 		"Craft Help",
 		[
@@ -62,22 +67,70 @@ if (not args) or (args[0].lower() in ["help", "?"]):
 		footer=FOOTER,
 	)
 
-if len(args) < 4:
-	return gatherlib.build_output(
-		"Craft Error",
-		[
-			"Not enough arguments.",
-			"Use `!craft ?` for usage.",
-		],
-		footer=FOOTER,
-	)
+if not args:
+	# Backward compatibility: if exactly one project exists, treat it as active.
+	if (not active_prog_key) and len(state) == 1:
+		for k in state:
+			active_prog_key = k
+			break
 
-rarity_key = norm_rarity(args[0])
-prof_flag = args[1].lower()
-item_name = args[2]
-tool_name = args[3]
+	if active_prog_key and state.get(active_prog_key):
+		is_resume = True
+		prog_key = active_prog_key
+		active_prog = state.get(prog_key, {})
+		rarity_key = norm_rarity(active_prog.get("rarity", ""))
+		prof_flag = (active_prog.get("item_type", "") or "").lower()
+		item_name = active_prog.get("item_name")
+		tool_name = active_prog.get("tool_name")
 
-opt_tokens = args[4:]
+		if (not item_name) or (not tool_name):
+			parts = prog_key.split(":")
+			if len(parts) >= 3 and parts[0] == "craft":
+				item_name = item_name or parts[1]
+				tool_name = tool_name or ":".join(parts[2:])
+
+		if (not item_name) or (not tool_name):
+			return gatherlib.build_output(
+				"Craft Error",
+				[
+					"Active project data is incomplete.",
+					"Start a new project with full arguments.",
+				],
+				footer=FOOTER,
+			)
+
+		opt_tokens = []
+	else:
+		if active_prog_key:
+			ch.set_cvar("craft_active", "")
+
+		return gatherlib.build_output(
+			"Craft Error",
+			[
+				"No active crafting project found.",
+				"Start one with `!craft <rarity> <p|c> <name> <tool>`.",
+				"Use `!craft ?` for usage.",
+			],
+			footer=FOOTER,
+		)
+else:
+	if len(args) < 4:
+		return gatherlib.build_output(
+			"Craft Error",
+			[
+				"Not enough arguments.",
+				"Use `!craft ?` for usage.",
+			],
+			footer=FOOTER,
+		)
+
+	rarity_key = norm_rarity(args[0])
+	prof_flag = args[1].lower()
+	item_name = args[2]
+	tool_name = args[3]
+	prog_key = f"craft:{item_name.lower()}:{tool_name.lower()}"
+	opt_tokens = args[4:]
+
 use_adv = False
 use_dis = False
 use_guidance = False
@@ -172,10 +225,11 @@ if prof_flag not in ["p", "c"]:
 
 rarity = RARITY_TABLE.get(rarity_key)
 if not rarity:
+	rarity_display = rarity_key if is_resume else args[0]
 	return gatherlib.build_output(
 		"Craft Error",
 		[
-			f"Unknown rarity: `{args[0]}`",
+			f"Unknown rarity: `{rarity_display}`",
 			"Use `!craft ?` for valid rarities.",
 		],
 		footer=FOOTER,
@@ -210,24 +264,33 @@ if not gate.ok:
 # Load or initialize progress
 # ---------------------------------------------------------------------------
 
-prog_key = f"craft:{item_name.lower()}:{tool_name.lower()}"
-state = load_json(ch.get_cvar("craft_progress", "{}"))
 prog = state.get(prog_key, {
 	"successes": 0,
 	"required": required,
 	"dc": dc,
 	"rarity": rarity_key,
 	"item_type": prof_flag,
+	"item_name": item_name,
+	"tool_name": tool_name,
 })
+
+# Ensure legacy entries have the fields needed for no-arg resume.
+if "item_name" not in prog:
+	prog["item_name"] = item_name
+if "tool_name" not in prog:
+	prog["tool_name"] = tool_name
+if "rarity" not in prog:
+	prog["rarity"] = rarity_key
+if "item_type" not in prog:
+	prog["item_type"] = prof_flag
 
 # ---------------------------------------------------------------------------
 # Roll check using GatherLib extraction for the specified tool only
 # ---------------------------------------------------------------------------
 
 # Force a tool-only roll so no skill (including Arcana) can override.
-ability_keys = ["str", "dex", "con", "int", "wis", "cha"]
-best_ability = "int"
-best_score = -999
+ability_keys = ["str", "dex", "con", "int", "wis"]
+ability_scores = []
 
 for a in ability_keys:
 	score_val = None
@@ -242,9 +305,10 @@ for a in ability_keys:
 			except:
 				score_val = None
 
-	if score_val is not None and score_val > best_score:
-		best_score = score_val
-		best_ability = a
+	if score_val is not None:
+		ability_scores.append((score_val, a))
+
+craft_ability = max(ability_scores)[1] if ability_scores else "int"
 
 tool_tier = gatherlib.tool_tier_from_cvars(ch, tool_name)
 tool_expr, base_roll = gatherlib.roll_tool_check_str(
@@ -253,11 +317,11 @@ tool_expr, base_roll = gatherlib.roll_tool_check_str(
 	adv=use_adv,
 	dis=use_dis,
 	guidance=use_guidance,
-	ability=best_ability
+	ability=craft_ability
 )
 
 roll_total = base_roll.total
-check_method = f"{tool_name.title()} ({best_ability.upper()})"
+check_method = f"{tool_name.title()} ({craft_ability.upper()})"
 roll_breakdown = f"{base_roll}"
 
 if bonus_expr:
@@ -277,6 +341,7 @@ if success:
 # Update state in cvar regardless (to track attempts)
 state[prog_key] = prog
 ch.set_cvar("craft_progress", dump_json(state))
+ch.set_cvar("craft_active", prog_key)
 
 # Only set cooldown and display after processing
 if success:
@@ -296,6 +361,8 @@ if prog["successes"] >= prog["required"]:
 	output_lines.append(f"🎉 **Item complete!** Your **{item_name}** is ready!")
 	state.pop(prog_key, None)
 	ch.set_cvar("craft_progress", dump_json(state))
+	if ch.get_cvar("craft_active", "") == prog_key:
+		ch.set_cvar("craft_active", "")
 elif success:
 	output_lines.append(f"Ready for another check {cd.format_remaining(COOLDOWN_SECONDS)}.")
 
