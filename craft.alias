@@ -5,7 +5,8 @@ embed
 
 using(
 	cooldownlib = "cc413a98-489e-49f9-aac2-907993761792",
-	gatherlib = "6d152ad4-045e-4e48-92c4-820929143039"
+	gatherlib = "6d152ad4-045e-4e48-92c4-820929143039",
+	gatherlib2 = "ba111c52-33c1-4933-a04c-a2c73bf086a2"
 )
 
 args = &ARGS&
@@ -21,14 +22,17 @@ def norm_rarity(s):
 		return "nonmagical"
 	return s
 
+def is_truthy_cvar(value):
+	return str(value or "").strip().lower() in ["true", "1", "yes", "on"]
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 RARITY_TABLE = {
-	"nonmagical": {"dc": 10, "successes": 2},
-	"common": {"dc": 15, "successes": 4},
-	"uncommon": {"dc": 18, "successes": 8},
+	"nonmagical": {"dc": 11, "successes": 2},
+	"common": {"dc": 13, "successes": 4},
+	"uncommon": {"dc": 16, "successes": 8},
 	"rare": {"dc": 21, "successes": 16},
 	"very rare": {"dc": 24, "successes": 32},
 }
@@ -45,12 +49,20 @@ active_prog_key = ch.get_cvar("craft_active", "")
 is_resume = False
 prog_key = ""
 
+use_guidance = is_truthy_cvar(ch.get_cvar("craft_guidance_pref", ""))
+if not use_guidance:
+	for pref_cvar in ["tmine_guidance_pref", "lumber_guidance_pref", "herb_guidance_pref"]:
+		if is_truthy_cvar(ch.get_cvar(pref_cvar, "")):
+			use_guidance = True
+			break
+
 if args and (args[0].lower() in ["help", "?"]):
 	return gatherlib.build_output(
 		"Craft Help",
 		[
 			"**Usage**",
 			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g] [-b <number|die>]`",
+			"- `!craft set guidance on|off`",
 			"",
 			"**Inputs**",
 			"- `rarity`: nonmagical | common | uncommon | rare | very rare",
@@ -59,10 +71,80 @@ if args and (args[0].lower() in ["help", "?"]):
 			"- `tool`: tool or skill name",
 			"- `adv|dis`: optional advantage/disadvantage",
 			"- `g`: optional guidance",
+			"- `set guidance on|off`: save craft guidance preference",
 			"- `-b <number|die>`: optional bonus (e.g. `-b 2`, `-b d4`)",
 			"",
 			"**Notes**",
 			f"- Checks have a {COOLDOWN_SECONDS} second cooldown.",
+			"- Guidance is also inherited from Mining, Lumber, and Herbalism if any of those aliases have it enabled.",
+		],
+		footer=FOOTER,
+	)
+
+if args and args[0].lower() == "set":
+	if len(args) == 1 or args[1].lower() in ["help", "?"]:
+		active_guidance_sources = []
+		for cvar_name, label in [
+			("craft_guidance_pref", "Craft"),
+			("tmine_guidance_pref", "Mining"),
+			("lumber_guidance_pref", "Lumber"),
+			("herb_guidance_pref", "Herbalism"),
+		]:
+			if (ch.get_cvar(cvar_name, "") or "").lower() in ["true", "1", "yes", "on"]:
+				active_guidance_sources.append(label)
+
+		return gatherlib.build_output(
+			"Craft Settings",
+			[
+				"**Usage**",
+				"- `!craft set guidance on`",
+				"- `!craft set guidance off`",
+				"",
+				"**Current Guidance**",
+				f"- Craft preference: {'on' if (ch.get_cvar('craft_guidance_pref', '') or '').lower() in ['true', '1', 'yes', 'on'] else 'off'}",
+				f"- Inherited from: {', '.join(active_guidance_sources) if active_guidance_sources else 'none'}",
+			],
+			footer=FOOTER,
+		)
+
+	if len(args) < 3 or args[1].lower() != "guidance":
+		return gatherlib.build_output(
+			"Craft Error",
+			[
+				"Unknown set option.",
+				"Use `!craft set guidance on|off`.",
+			],
+			footer=FOOTER,
+		)
+
+	setting = args[2].lower()
+	if setting in ["on", "true", "yes", "enable", "enabled"]:
+		ch.set_cvar("craft_guidance_pref", "true")
+		return gatherlib.build_output(
+			"Craft Guidance Preference Saved",
+			[
+				"Guidance will now be treated as always active for craft checks.",
+				"Use `!craft set guidance off` to clear this preference.",
+			],
+			footer=FOOTER,
+		)
+
+	if setting in ["off", "false", "no", "disable", "disabled", "clear"]:
+		ch.set_cvar("craft_guidance_pref", "")
+		return gatherlib.build_output(
+			"Craft Guidance Cleared",
+			[
+				"Craft no longer forces guidance by default.",
+				"Guidance may still be inherited from Mining, Lumber, or Herbalism if those aliases have it enabled.",
+			],
+			footer=FOOTER,
+		)
+
+	return gatherlib.build_output(
+		"Craft Error",
+		[
+			"Guidance setting must be `on` or `off`.",
+			"Use `!craft set guidance on|off`.",
 		],
 		footer=FOOTER,
 	)
@@ -82,6 +164,7 @@ if not args:
 		prof_flag = (active_prog.get("item_type", "") or "").lower()
 		item_name = active_prog.get("item_name")
 		tool_name = active_prog.get("tool_name")
+		opt_tokens = list(active_prog.get("remembered_opt_tokens", []))
 
 		if (not item_name) or (not tool_name):
 			parts = prog_key.split(":")
@@ -119,6 +202,7 @@ else:
 			"Craft Error",
 			[
 				"Not enough arguments.",
+				"Use `!craft set guidance on|off` to save guidance preference.",
 				"Use `!craft ?` for usage.",
 			],
 			footer=FOOTER,
@@ -133,7 +217,6 @@ else:
 
 use_adv = False
 use_dis = False
-use_guidance = False
 bonus_expr = ""
 
 i = 0
@@ -337,6 +420,17 @@ success = roll_total >= dc
 
 if success:
 	prog["successes"] += 1
+
+prog["remembered_args"] = list(args) if args else list(prog.get("remembered_args", []))
+prog["remembered_opt_tokens"] = []
+if use_adv:
+	prog["remembered_opt_tokens"].append("adv")
+if use_dis:
+	prog["remembered_opt_tokens"].append("dis")
+if use_guidance:
+	prog["remembered_opt_tokens"].append("g")
+if bonus_expr:
+	prog["remembered_opt_tokens"].extend(["-b", bonus_expr])
 
 # Update state in cvar regardless (to track attempts)
 state[prog_key] = prog
