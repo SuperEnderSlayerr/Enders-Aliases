@@ -45,8 +45,6 @@ COOLDOWN_SECONDS = 10  # for testing
 # ---------------------------------------------------------------------------
 
 state = load_json(ch.get_cvar("craft_progress", "{}"))
-active_prog_key = ch.get_cvar("craft_active", "")
-is_resume = False
 prog_key = ""
 
 use_guidance = is_truthy_cvar(ch.get_cvar("craft_guidance_pref", ""))
@@ -62,7 +60,7 @@ if args and (args[0].lower() in ["help", "?"]):
 		[
 			"**Usage**",
 			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g] [-b <number|die>]`",
-			"- `!craft` (resume active project)",
+
 			"- `!craft set guidance on|off`",
 			"- `!craft discard`",
 			"",
@@ -154,17 +152,19 @@ if args and args[0].lower() == "set":
 	)
 
 if args and args[0].lower() == "discard":
-	if active_prog_key and state.get(active_prog_key):
-		active_prog = state.get(active_prog_key, {})
-		item_name = active_prog.get("item_name", "Unknown Item")
-		state.pop(active_prog_key, None)
-		ch.set_cvar("craft_progress", dump_json(state))
-		ch.set_cvar("craft_active", "")
+	if state:
+		# Get the first (and typically only) project name for confirmation message
+		first_key = ""
+		for key in state:
+			first_key = key
+			break
+		item_name = state[first_key].get("item_name", "Unknown Item") if first_key else "Unknown Item"
+		ch.set_cvar("craft_progress", dump_json({}))
 		return gatherlib.build_output(
 			"Craft Discarded",
 			[
 				f"Abandoned the **{item_name}** project.",
-				"Progress has been discarded.",
+				"All crafting progress has been cleared.",
 			],
 			footer=FOOTER,
 		)
@@ -179,64 +179,52 @@ if args and args[0].lower() == "discard":
 		)
 
 if not args:
-	# Backward compatibility: if exactly one project exists, treat it as active.
-	if (not active_prog_key) and len(state) == 1:
-		for k in state:
-			active_prog_key = k
+	# If there's an active project, continue it without args
+	if state:
+		first_key = ""
+		for key in state:
+			first_key = key
 			break
-
-	if active_prog_key and state.get(active_prog_key):
-		is_resume = True
-		prog_key = active_prog_key
-		active_prog = state.get(prog_key, {})
-		rarity_key = norm_rarity(active_prog.get("rarity", ""))
-		prof_flag = (active_prog.get("item_type", "") or "").lower()
-		item_name = active_prog.get("item_name")
-		tool_name = active_prog.get("tool_name")
-		opt_tokens = list(active_prog.get("remembered_opt_tokens", []))
-
-		if (not item_name) or (not tool_name):
-			parts = prog_key.split(":")
-			if len(parts) >= 3 and parts[0] == "craft":
-				item_name = item_name or parts[1]
-				tool_name = tool_name or ":".join(parts[2:])
-
-		if (not item_name) or (not tool_name):
+		
+		if first_key:
+			prog = state[first_key]
+			rarity_key = prog.get("rarity", "")
+			prof_flag = prog.get("item_type", "")
+			item_name = prog.get("item_name", "")
+			tool_name = prog.get("tool_name", "")
+			prog_key = first_key
+			opt_tokens = prog.get("remembered_opt_tokens", [])
+		else:
 			return gatherlib.build_output(
 				"Craft Error",
 				[
-					"Active project data is incomplete.",
-					"Start a new project with full arguments.",
+					"No arguments provided.",
+					"Start a project with `!craft <rarity> <p|c> <name> <tool> [options]`.",
+					"Use `!craft ?` for usage.",
 				],
 				footer=FOOTER,
 			)
-
-		opt_tokens = []
 	else:
-		if active_prog_key:
-			ch.set_cvar("craft_active", "")
-
 		return gatherlib.build_output(
 			"Craft Error",
 			[
-				"No active crafting project found.",
-				"Start one with `!craft <rarity> <p|c> <name> <tool>`.",
+				"No arguments provided.",
+				"Start a project with `!craft <rarity> <p|c> <name> <tool> [options]`.",
 				"Use `!craft ?` for usage.",
 			],
 			footer=FOOTER,
 		)
+elif len(args) < 4:
+	return gatherlib.build_output(
+		"Craft Error",
+		[
+			"Not enough arguments.",
+			"Use `!craft set guidance on|off` to save guidance preference.",
+			"Use `!craft ?` for usage.",
+		],
+		footer=FOOTER,
+	)
 else:
-	if len(args) < 4:
-		return gatherlib.build_output(
-			"Craft Error",
-			[
-				"Not enough arguments.",
-				"Use `!craft set guidance on|off` to save guidance preference.",
-				"Use `!craft ?` for usage.",
-			],
-			footer=FOOTER,
-		)
-
 	rarity_key = norm_rarity(args[0])
 	prof_flag = args[1].lower()
 	item_name = args[2]
@@ -337,11 +325,10 @@ if prof_flag not in ["p", "c"]:
 
 rarity = RARITY_TABLE.get(rarity_key)
 if not rarity:
-	rarity_display = rarity_key if is_resume else args[0]
 	return gatherlib.build_output(
 		"Craft Error",
 		[
-			f"Unknown rarity: `{rarity_display}`",
+			f"Unknown rarity: `{args[0]}`",
 			"Use `!craft ?` for valid rarities.",
 		],
 		footer=FOOTER,
@@ -464,7 +451,6 @@ if bonus_expr:
 # Update state in cvar regardless (to track attempts)
 state[prog_key] = prog
 ch.set_cvar("craft_progress", dump_json(state))
-ch.set_cvar("craft_active", prog_key)
 
 # Only set cooldown and display after processing
 if success:
@@ -482,10 +468,7 @@ output_lines = [
 if prog["successes"] >= prog["required"]:
 	output_lines.append("")
 	output_lines.append(f"🎉 **Item complete!** Your **{item_name}** is ready!")
-	state.pop(prog_key, None)
-	ch.set_cvar("craft_progress", dump_json(state))
-	if ch.get_cvar("craft_active", "") == prog_key:
-		ch.set_cvar("craft_active", "")
+	ch.set_cvar("craft_progress", dump_json({}))
 elif success:
 	output_lines.append(f"Ready for another check {cd.format_remaining(COOLDOWN_SECONDS)}.")
 
