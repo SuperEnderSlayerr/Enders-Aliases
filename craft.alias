@@ -62,7 +62,9 @@ if args and (args[0].lower() in ["help", "?"]):
 		[
 			"**Usage**",
 			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g] [-b <number|die>]`",
+			"- `!craft` (resume active project)",
 			"- `!craft set guidance on|off`",
+			"- `!craft discard`",
 			"",
 			"**Inputs**",
 			"- `rarity`: nonmagical | common | uncommon | rare | very rare",
@@ -72,11 +74,13 @@ if args and (args[0].lower() in ["help", "?"]):
 			"- `adv|dis`: optional advantage/disadvantage",
 			"- `g`: optional guidance",
 			"- `set guidance on|off`: save craft guidance preference",
+			"- `discard`: abandon current project",
 			"- `-b <number|die>`: optional bonus (e.g. `-b 2`, `-b d4`)",
 			"",
 			"**Notes**",
 			f"- Checks have a {COOLDOWN_SECONDS} second cooldown.",
 			"- Guidance is also inherited from Mining, Lumber, and Herbalism if any of those aliases have it enabled.",
+			"- Options from the first check are remembered and reused on subsequent checks.",
 		],
 		footer=FOOTER,
 	)
@@ -148,6 +152,31 @@ if args and args[0].lower() == "set":
 		],
 		footer=FOOTER,
 	)
+
+if args and args[0].lower() == "discard":
+	if active_prog_key and state.get(active_prog_key):
+		active_prog = state.get(active_prog_key, {})
+		item_name = active_prog.get("item_name", "Unknown Item")
+		state.pop(active_prog_key, None)
+		ch.set_cvar("craft_progress", dump_json(state))
+		ch.set_cvar("craft_active", "")
+		return gatherlib.build_output(
+			"Craft Discarded",
+			[
+				f"Abandoned the **{item_name}** project.",
+				"Progress has been discarded.",
+			],
+			footer=FOOTER,
+		)
+	else:
+		return gatherlib.build_output(
+			"Craft Error",
+			[
+				"No active crafting project to discard.",
+				"Start one with `!craft <rarity> <p|c> <name> <tool>`.",
+			],
+			footer=FOOTER,
+		)
 
 if not args:
 	# Backward compatibility: if exactly one project exists, treat it as active.
