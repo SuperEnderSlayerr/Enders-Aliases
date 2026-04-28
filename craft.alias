@@ -13,6 +13,7 @@ args = &ARGS&
 ch = character()
 
 FOOTER = "!craft ? | @superenderslayer"
+CRAFT_SUCCESS_CC = "Craft Successes"
 
 def norm_rarity(s):
 	s = (s or "").lower().replace("_", " ").replace("-", " ").strip()
@@ -59,7 +60,7 @@ if args and (args[0].lower() in ["help", "?"]):
 		"Craft Help",
 		[
 			"**Usage**",
-			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g] [-b <number|die>]`",
+			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g] [-b <number|dice>]`",
 
 			"- `!craft set guidance on|off`",
 			"- `!craft discard`",
@@ -73,7 +74,7 @@ if args and (args[0].lower() in ["help", "?"]):
 			"- `g`: optional guidance",
 			"- `set guidance on|off`: save craft guidance preference",
 			"- `discard`: abandon current project",
-			"- `-b <number|die>`: optional bonus (e.g. `-b 2`, `-b d4`)",
+			"- `-b <number|dice>`: optional bonus (e.g. `-b 2`, `-b d4`, `-b 2d4`)",
 			"",
 			"**Notes**",
 			f"- Checks have a {COOLDOWN_SECONDS} second cooldown.",
@@ -160,11 +161,15 @@ if args and args[0].lower() == "discard":
 			break
 		item_name = state[first_key].get("item_name", "Unknown Item") if first_key else "Unknown Item"
 		ch.set_cvar("craft_progress", dump_json({}))
+		reset_note = f"`{CRAFT_SUCCESS_CC}` was not changed."
+		if ch.cc_exists(CRAFT_SUCCESS_CC):
+			ch.set_cc(CRAFT_SUCCESS_CC, 0)
+			reset_note = f"`{CRAFT_SUCCESS_CC}` was reset to 0."
 		return gatherlib.build_output(
 			"Craft Discarded",
 			[
 				f"Abandoned the **{item_name}** project.",
-				"All crafting progress has been cleared.",
+				f"All crafting progress has been cleared. {reset_note}",
 			],
 			footer=FOOTER,
 		)
@@ -279,13 +284,39 @@ while i < len(opt_tokens):
 		bonus_raw = opt_tokens[i + 1].lower()
 		if bonus_raw.replace("-", "", 1).isdigit():
 			bonus_expr = bonus_raw
-		elif bonus_raw.startswith("d") and bonus_raw[1:].isdigit():
-			bonus_expr = f"1{bonus_raw}"
+		elif "d" in bonus_raw:
+			d_parts = bonus_raw.split("d", 1)
+			num_dice_raw = d_parts[0]
+			die_size_raw = d_parts[1]
+
+			if die_size_raw.isdigit() and int(die_size_raw) > 0:
+				if num_dice_raw == "":
+					bonus_expr = f"1d{die_size_raw}"
+				elif num_dice_raw.isdigit() and int(num_dice_raw) > 0:
+					bonus_expr = f"{int(num_dice_raw)}d{die_size_raw}"
+				else:
+					return gatherlib.build_output(
+						"Craft Error",
+						[
+							"Bonus after `-b` must be a number or dice expression (examples: `2`, `d4`, `2d4`).",
+							"Use `!craft ?` for usage.",
+						],
+						footer=FOOTER,
+					)
+			else:
+				return gatherlib.build_output(
+					"Craft Error",
+					[
+						"Bonus after `-b` must be a number or dice expression (examples: `2`, `d4`, `2d4`).",
+						"Use `!craft ?` for usage.",
+					],
+					footer=FOOTER,
+				)
 		else:
 			return gatherlib.build_output(
 				"Craft Error",
 				[
-					"Bonus after `-b` must be a number or die size (example: `2` or `d4`).",
+					"Bonus after `-b` must be a number or dice expression (examples: `2`, `d4`, `2d4`).",
 					"Use `!craft ?` for usage.",
 				],
 				footer=FOOTER,
@@ -363,8 +394,13 @@ if not gate.ok:
 # Load or initialize progress
 # ---------------------------------------------------------------------------
 
+if not ch.cc_exists(CRAFT_SUCCESS_CC):
+	# Auto-create on first use so users do not need a manual setup step.
+	ch.create_cc_nx(CRAFT_SUCCESS_CC, minVal=0, maxVal=100, reset_to=0, reset_by=None, dispType="bubble")
+
+is_new_project = prog_key not in state
+
 prog = state.get(prog_key, {
-	"successes": 0,
 	"required": required,
 	"dc": dc,
 	"rarity": rarity_key,
@@ -382,6 +418,34 @@ if "rarity" not in prog:
 	prog["rarity"] = rarity_key
 if "item_type" not in prog:
 	prog["item_type"] = prof_flag
+
+# Migrate legacy progress that used cvar-stored successes into the CC once.
+if "successes" in prog:
+	try:
+		legacy_successes = int(prog.get("successes", 0))
+	except:
+		legacy_successes = 0
+	if legacy_successes > 0:
+		max_successes = ch.get_cc_max(CRAFT_SUCCESS_CC)
+		if max_successes is not None:
+			legacy_successes = min(legacy_successes, max_successes)
+		ch.set_cc(CRAFT_SUCCESS_CC, legacy_successes)
+	prog.pop("successes", None)
+
+if is_new_project:
+	ch.set_cc(CRAFT_SUCCESS_CC, 0)
+
+current_successes = ch.get_cc(CRAFT_SUCCESS_CC)
+
+# Keep the counter ceiling aligned with this project's target so edits stay intuitive.
+try:
+	current_max = ch.get_cc_max(CRAFT_SUCCESS_CC)
+	if current_max is not None and int(current_max) != int(prog["required"]):
+		ch.edit_cc(CRAFT_SUCCESS_CC, maxVal=int(prog["required"]))
+		current_successes = min(current_successes, int(prog["required"]))
+		ch.set_cc(CRAFT_SUCCESS_CC, current_successes)
+except:
+	pass
 
 # ---------------------------------------------------------------------------
 # Roll check using GatherLib extraction for the specified tool only
@@ -435,7 +499,11 @@ if bonus_expr:
 success = roll_total >= dc
 
 if success:
-	prog["successes"] += 1
+	current_successes = current_successes + 1
+	max_successes = ch.get_cc_max(CRAFT_SUCCESS_CC)
+	if max_successes is not None:
+		current_successes = min(current_successes, max_successes)
+	ch.set_cc(CRAFT_SUCCESS_CC, current_successes)
 
 prog["remembered_args"] = list(args) if args else list(prog.get("remembered_args", []))
 prog["remembered_opt_tokens"] = []
@@ -462,13 +530,14 @@ output_lines = [
 	roll_breakdown,
 	"",
 	f"Result: {'✓ Success' if success else '✗ Failed'} (DC {dc})",
-	f"Progress: {prog['successes']}/{prog['required']} successes",
+	f"Progress: {current_successes}/{prog['required']} successes",
 ]
 
-if prog["successes"] >= prog["required"]:
+if current_successes >= prog["required"]:
 	output_lines.append("")
 	output_lines.append(f"🎉 **Item complete!** Your **{item_name}** is ready!")
 	ch.set_cvar("craft_progress", dump_json({}))
+	ch.set_cc(CRAFT_SUCCESS_CC, 0)
 elif success:
 	output_lines.append(f"Ready for another check {cd.format_remaining(COOLDOWN_SECONDS)}.")
 
