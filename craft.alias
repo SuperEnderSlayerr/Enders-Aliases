@@ -46,6 +46,11 @@ COOLDOWN_SECONDS = 10  # for testing
 # ---------------------------------------------------------------------------
 
 state = load_json(ch.get_cvar("craft_progress", "{}"))
+try:
+	# Validate state is dict-like by trying to use it
+	_ = state.get("test", None)
+except:
+	state = {}
 prog_key = ""
 
 use_guidance = is_truthy_cvar(ch.get_cvar("craft_guidance_pref", ""))
@@ -63,7 +68,7 @@ if args and (args[0].lower() in ["help", "?"]):
 			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g] [-b <number|dice>]`",
 
 			"- `!craft set guidance on|off`",
-			"- `!craft discard`",
+			"- `!craft discard` or `!craft clear`",
 			"",
 			"**Inputs**",
 			"- `rarity`: nonmagical | common | uncommon | rare | very rare",
@@ -73,13 +78,8 @@ if args and (args[0].lower() in ["help", "?"]):
 			"- `adv|dis`: optional advantage/disadvantage",
 			"- `g`: optional guidance",
 			"- `set guidance on|off`: save craft guidance preference",
-			"- `discard`: abandon current project",
+			"- `discard` or `clear`: abandon current project",
 			"- `-b <number|dice>`: optional bonus (e.g. `-b 2`, `-b d4`, `-b 2d4`)",
-			"",
-			"**Notes**",
-			f"- Checks have a {COOLDOWN_SECONDS} second cooldown.",
-			"- Guidance is also inherited from Mining, Lumber, and Herbalism if any of those aliases have it enabled.",
-			"- Options from the first check are remembered and reused on subsequent checks.",
 		],
 		footer=FOOTER,
 	)
@@ -152,7 +152,7 @@ if args and args[0].lower() == "set":
 		footer=FOOTER,
 	)
 
-if args and args[0].lower() == "discard":
+if args and args[0].lower() in ["discard", "clear"]:
 	if state:
 		# Get the first (and typically only) project name for confirmation message
 		first_key = ""
@@ -236,6 +236,24 @@ else:
 	tool_name = args[3]
 	prog_key = f"craft:{item_name.lower()}:{tool_name.lower()}"
 	opt_tokens = args[4:]
+
+	# If there's an existing active project (any entry in state) and the
+	# requested prog_key isn't the same, don't allow starting a new project.
+	if state and prog_key not in state:
+		first_key = ""
+		for k in state:
+			first_key = k
+			break
+		first_proj = state.get(first_key, {})
+		first_item_name = first_proj.get("item_name", "Unknown Item")
+		return gatherlib.build_output(
+			"Craft Error",
+			[
+				f"You are already working on **{first_item_name}**.",
+				"Abandon it with `!craft discard` or `!craft clear` before starting a new project.",
+			],
+			footer=FOOTER,
+		)
 
 use_adv = False
 use_dis = False
@@ -371,6 +389,31 @@ required = rarity["successes"]
 if prof_flag == "c":
 	required = max(1, (required + 1) // 2)
 
+# Record base required after consumed/permanent adjustment so we can
+# report reductions caused by artificer levels and feats.
+required_base = required
+
+# Artificer level 10+ reduces common/uncommon crafting time to 1/4
+artificer_level = ch.levels.get("Artificer") or 0
+required_before_artificer = required
+if artificer_level >= 10 and rarity_key in ["common", "uncommon"]:
+	required = max(1, (required + 3) // 4)
+required_after_artificer = required
+
+# Adroit Crafter feat halves crafting time
+feats = ch.get_cvar("feats", "")
+required_before_feat = required
+if "Adroit Crafter" in feats:
+	required = max(1, (required + 1) // 2)
+required_after_feat = required
+
+# Build human-readable reduction notes to show in the embed when applicable.
+reduction_notes = []
+if required_before_artificer != required_after_artificer:
+	reduction_notes.append(f"Magic Item Adept reduced required checks from {required_before_artificer} to {required_after_artificer}.")
+if required_before_feat != required_after_feat:
+	reduction_notes.append(f"Adroit Crafter feat reduced required checks from {required_before_feat} to {required_after_feat}.")
+
 # ---------------------------------------------------------------------------
 # Cooldown check
 # ---------------------------------------------------------------------------
@@ -473,7 +516,26 @@ for a in ability_keys:
 
 craft_ability = max(ability_scores)[1] if ability_scores else "int"
 
-tool_tier = gatherlib.tool_tier_from_cvars(ch, tool_name)
+# Resolve tool tier, trying common shorthand/variant forms so users who pass
+# `smith` or `smiths` still match cvar entries like "smith's tools".
+tool_variants = [
+	tool_name,
+	f"{tool_name} tools",
+	f"{tool_name}'s tools",
+	f"{tool_name}s tools",
+]
+
+selected_tool_variant = tool_name
+tool_tier = 0
+for tv in tool_variants:
+	t_tier = gatherlib.tool_tier_from_cvars(ch, tv)
+	if t_tier > tool_tier:
+		tool_tier = t_tier
+		selected_tool_variant = tv
+	# stop early if we found expertise
+	if tool_tier == 2:
+		break
+
 tool_expr, base_roll = gatherlib.roll_tool_check_str(
 	ch,
 	tool_tier,
@@ -483,14 +545,60 @@ tool_expr, base_roll = gatherlib.roll_tool_check_str(
 	ability=craft_ability
 )
 
-roll_total = base_roll.total
-check_method = f"{tool_name.title()} ({craft_ability.upper()})"
-roll_breakdown = f"{base_roll}"
+# To support natural 20 / natural 1 handling reliably, extract the d20
+# portion separately by re-rolling the d20 core with the same adv/dis.
+def _d20_core_expr(adv, dis):
+	if adv and not dis:
+		return "2d20kh1"
+	if dis and not adv:
+		return "2d20kl1"
+	return "1d20"
+
+d20_v = vroll(_d20_core_expr(use_adv, use_dis))
+
+# Compute deterministic modifiers (ability mod + proficiency/expertise)
+mod_val = 0
+try:
+	mod_val = int(ch.stats.get_mod(craft_ability))
+except:
+	try:
+		mod_val = int(getattr(ch.stats, craft_ability).mod)
+	except:
+		mod_val = 0
+
+pb = 0
+try:
+	pb = int(ch.stats.prof_bonus)
+except:
+	pb = 0
+
+prof_plus = 0
+if tool_tier == 2:
+	prof_plus = pb * 2
+elif tool_tier == 1:
+	prof_plus = pb
+
+guidance_val = 0
+if use_guidance:
+	grv = vroll("1d4[guidance]")
+	guidance_val = grv.total
+
+roll_total = d20_v.total + mod_val + prof_plus + guidance_val
+roll_breakdown = f"{d20_v} + {mod_val}[mod]"
+if prof_plus:
+	if tool_tier == 2:
+		roll_breakdown += f" + {pb}[proficiency] + {pb}[expertise]"
+	else:
+		roll_breakdown += f" + {pb}[proficiency]"
+if use_guidance:
+	roll_breakdown = f"{roll_breakdown} + {grv}"
 
 if bonus_expr:
 	bonus_roll = vroll(bonus_expr)
 	roll_total += bonus_roll.total
-	roll_breakdown = f"{base_roll} + {bonus_roll}"
+	roll_breakdown = f"{roll_breakdown} + {bonus_roll}"
+
+check_method = f"{selected_tool_variant.title()} ({craft_ability.upper()})"
 
 # ---------------------------------------------------------------------------
 # Check result
@@ -498,12 +606,33 @@ if bonus_expr:
 
 success = roll_total >= dc
 
-if success:
-	current_successes = current_successes + 1
+# Determine how many successes to add/remove based on natural d20 rules:
+# - Natural 20 counts as 2 successes (when it results in a success).
+# - Natural 1 reduces successes by 1 (cannot go below 0).
+try:
+	d20_val = int(d20_v.total)
+except:
+	try:
+		d20_val = int(d20_v)
+	except:
+		d20_val = None
+added_success = 1 if success else 0
+if d20_val == 20:
+	if success:
+		added_success = 2
+elif d20_val == 1:
+	added_success = max(0, added_success - 1)
+
+if added_success > 0:
+	current_successes = current_successes + added_success
 	max_successes = ch.get_cc_max(CRAFT_SUCCESS_CC)
 	if max_successes is not None:
 		current_successes = min(current_successes, max_successes)
 	ch.set_cc(CRAFT_SUCCESS_CC, current_successes)
+else:
+	# If no successes added this check, still ensure counter exists but do not change it.
+	if not ch.cc_exists(CRAFT_SUCCESS_CC):
+		ch.create_cc_nx(CRAFT_SUCCESS_CC, minVal=0, maxVal=100, reset_to=0, reset_by=None, dispType="bubble")
 
 prog["remembered_args"] = list(args) if args else list(prog.get("remembered_args", []))
 prog["remembered_opt_tokens"] = []
@@ -530,8 +659,21 @@ output_lines = [
 	roll_breakdown,
 	"",
 	f"Result: {'✓ Success' if success else '✗ Failed'} (DC {dc})",
-	f"Progress: {current_successes}/{prog['required']} successes",
+		f"Progress: {current_successes}/{prog['required']} successes",
+		"",
+		"Forgot a bonus that would've made you pass? Add 1 to the Craft Successes CC to count the progress!",
 ]
+
+if reduction_notes:
+	output_lines.append("")
+	output_lines.extend(reduction_notes)
+
+if d20_val == 20:
+	output_lines.append("")
+	output_lines.append("Natural 20! Counts as 2 successes.")
+if d20_val == 1:
+	output_lines.append("")
+	output_lines.append("Natural 1 — one success removed.")
 
 if current_successes >= prog["required"]:
 	output_lines.append("")
