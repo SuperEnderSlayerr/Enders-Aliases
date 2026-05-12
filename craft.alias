@@ -17,14 +17,150 @@ CRAFT_SUCCESS_CC = "Craft Successes"
 
 def norm_rarity(s):
 	s = (s or "").lower().replace("_", " ").replace("-", " ").strip()
-	if s in ["veryrare", "very rare", "vr"]:
-		return "very rare"
-	if s in ["nonmagical", "non magical", "mundane", "nm"]:
-		return "nonmagical"
+	rarity_aliases = {
+		"nonmagical": {"nonmagical", "non magical", "mundane", "nm", "n"},
+		"common": {"common", "c"},
+		"uncommon": {"uncommon", "u"},
+		"rare": {"rare", "r"},
+		"very rare": {"veryrare", "very rare", "vr"},
+	}
+	for rarity, aliases in rarity_aliases.items():
+		if s in aliases:
+			return rarity
 	return s
 
 def is_truthy_cvar(value):
 	return str(value or "").strip().lower() in ["true", "1", "yes", "on"]
+
+def _norm_tool_name(value):
+	value = (value or "").strip().lower()
+	value = value.replace("’", "'")
+	value = value.replace("_", " ").replace("-", " ")
+	value = " ".join(value.split())
+	return value
+
+def _split_tool_cvar(value):
+	parts = []
+	for raw in (value or "").replace(";", ",").replace("\n", ",").replace("|", ",").split(","):
+		raw = (raw or "").strip().strip("[").strip("]").strip("(").strip(")").strip("{").strip("}")
+		if not raw:
+			continue
+		parts.append(_norm_tool_name(raw))
+	return parts
+
+def _tool_match_score(query, candidate):
+	query = _norm_tool_name(query)
+	candidate = _norm_tool_name(candidate)
+	if not query or not candidate:
+		return 0
+	if query == candidate:
+		return 1000 + len(candidate)
+	query_words = [w for w in query.replace("'", "").split(" ") if w]
+	candidate_words = [w for w in candidate.replace("'", "").split(" ") if w]
+	for q_word in query_words:
+		for c_word in candidate_words:
+			if c_word.startswith(q_word):
+				return max(700 + len(c_word) + len(q_word), 700)
+	if candidate.startswith(query):
+		return 800 + len(query)
+	if query in candidate:
+		return 600 + len(query)
+	compact_query = query.replace("'", "").replace(" ", "")
+	compact_candidate = candidate.replace("'", "").replace(" ", "")
+	if compact_candidate.startswith(compact_query):
+		return 500 + len(compact_query)
+	if compact_query in compact_candidate:
+		return 400 + len(compact_query)
+	return 0
+
+def _best_tool_match(query, tool_list):
+	best_name = ""
+	best_score = 0
+	for candidate in tool_list or []:
+		score = _tool_match_score(query, candidate)
+		if score > best_score:
+			best_score = score
+			best_name = candidate
+	return best_name, best_score
+
+TOOL_FALLBACK_OPTIONS = [
+	"Alchemist's Supplies",
+	"Brewer's Supplies",
+	"Calligrapher's Supplies",
+	"Carpenter's Tools",
+	"Cartographer's Tools",
+	"Cobbler's Tools",
+	"Cook's Utensils",
+	"Glassblower's Tools",
+	"Jeweler's Tools",
+	"Leatherworker's Tools",
+	"Mason's Tools",
+	"Painter's Supplies",
+	"Potter's Tools",
+	"Smith's Tools",
+	"Tinker's Tools",
+	"Weaver's Tools",
+	"Woodcarver's Tools",
+	"Dice Set",
+	"Dragonchess Set",
+	"Playing Card Set",
+	"Three-Dragon Ante Set",
+	"Bagpipes",
+	"Birdpipes",
+	"Drum",
+	"Dulcimer",
+	"Flute",
+	"Glaur",
+	"Hand Drum",
+	"Horn",
+	"Longhorn",
+	"Lute",
+	"Lyre",
+	"Pan Flute",
+	"Shawm",
+	"Songhorn",
+	"Tantan",
+	"Thelarr",
+	"Tocken",
+	"Viol",
+	"Wargong",
+	"Yarting",
+	"Zulkoon",
+	"Disguise Kit",
+	"Forgery Kit",
+	"Herbalism Kit",
+	"Navigator's Tools",
+	"Poisoner's Kit",
+	"Thieves' Tools",
+	"Land Vehicles",
+	"Water Vehicles",
+]
+
+def _tool_tier_and_name_from_cvars(ch, tool_name, e_cvar="eTools", p_cvar="pTools"):
+	query = _norm_tool_name(tool_name)
+	e_tools = _split_tool_cvar(ch.get_cvar(e_cvar) or "")
+	p_tools = _split_tool_cvar(ch.get_cvar(p_cvar) or "")
+
+	best_e_name, best_e_score = _best_tool_match(query, e_tools)
+	best_p_name, best_p_score = _best_tool_match(query, p_tools)
+	fallback_name, fallback_score = _best_tool_match(query, TOOL_FALLBACK_OPTIONS)
+
+	if best_e_score <= 0 and best_p_score <= 0:
+		if fallback_score > 0:
+			return {"tool": fallback_name, "tier": 0, "score": fallback_score}
+		return {"tool": "", "tier": 0, "score": 0}
+
+	if best_e_score > best_p_score:
+		return {"tool": best_e_name, "tier": 2, "score": best_e_score}
+	if best_p_score > best_e_score:
+		return {"tool": best_p_name, "tier": 1, "score": best_p_score}
+
+	if best_e_score > 0:
+		return {"tool": best_e_name, "tier": 2, "score": best_e_score}
+	if best_p_score > 0:
+		return {"tool": best_p_name, "tier": 1, "score": best_p_score}
+
+	return {"tool": tool_name, "tier": 0, "score": 0}
 
 # ---------------------------------------------------------------------------
 # Config
@@ -516,25 +652,11 @@ for a in ability_keys:
 
 craft_ability = max(ability_scores)[1] if ability_scores else "int"
 
-# Resolve tool tier, trying common shorthand/variant forms so users who pass
-# `smith` or `smiths` still match cvar entries like "smith's tools".
-tool_variants = [
-	tool_name,
-	f"{tool_name} tools",
-	f"{tool_name}'s tools",
-	f"{tool_name}s tools",
-]
-
-selected_tool_variant = tool_name
-tool_tier = 0
-for tv in tool_variants:
-	t_tier = gatherlib.tool_tier_from_cvars(ch, tv)
-	if t_tier > tool_tier:
-		tool_tier = t_tier
-		selected_tool_variant = tv
-	# stop early if we found expertise
-	if tool_tier == 2:
-		break
+# Resolve the closest matching stored tool name so partial inputs like
+# "callig" can resolve to "Calligrapher's Tools" if the character has it.
+tool_match = _tool_tier_and_name_from_cvars(ch, tool_name)
+selected_tool_variant = tool_match.get("tool") or tool_name
+tool_tier = int(tool_match.get("tier", 0) or 0)
 
 tool_expr, base_roll = gatherlib.roll_tool_check_str(
 	ch,
@@ -661,7 +783,7 @@ output_lines = [
 	f"Result: {'✓ Success' if success else '✗ Failed'} (DC {dc})",
 		f"Progress: {current_successes}/{prog['required']} successes",
 		"",
-		"Forgot a bonus that would've made you pass? Add 1 to the Craft Successes CC to count the progress!",
+		"Forgot a bonus that would've made you pass? Add 1 to the \"Craft Successes\" CC to count the progress!",
 ]
 
 if reduction_notes:
