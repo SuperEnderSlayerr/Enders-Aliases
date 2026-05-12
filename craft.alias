@@ -367,7 +367,13 @@ elif len(args) < 4:
 	)
 else:
 	rarity_key = norm_rarity(args[0])
-	prof_flag = args[1].lower()
+	prof_raw = args[1].lower()
+	if prof_raw in ["p", "permanent", "permanant"]:
+		prof_flag = "p"
+	elif prof_raw in ["c", "consumed"]:
+		prof_flag = "c"
+	else:
+		prof_flag = prof_raw
 	item_name = args[2]
 	tool_name = args[3]
 	prog_key = f"craft:{item_name.lower()}:{tool_name.lower()}"
@@ -502,7 +508,7 @@ if prof_flag not in ["p", "c"]:
 	return gatherlib.build_output(
 		"Craft Error",
 		[
-			"Second argument must be `p` (permanent) or `c` (consumed).",
+			"Second argument must be `p`, `c`, `permanent`, `permanant`, or `consumed`.",
 			"Use `!craft ?` for usage.",
 		],
 		footer=FOOTER,
