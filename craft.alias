@@ -39,26 +39,6 @@ def _norm_tool_name(value):
 	value = " ".join(value.split())
 	return value
 
-def _title_words(s, default=""):
-	"""Title-case a string preserving apostrophes (e.g. "mason's" -> "Mason's")."""
-	s = (s or "").strip()
-	if not s:
-		return default
-
-	words = []
-	for part in s.split(" "):
-		part = part.strip()
-		if not part:
-			continue
-		if len(part) == 1:
-			words.append(part.upper())
-			continue
-		head = part[0].upper()
-		tail = part[1:].lower()
-		words.append(head + tail)
-
-	return " ".join(words) if words else (default or s)
-
 def _split_tool_cvar(value):
 	parts = []
 	for raw in (value or "").replace(";", ",").replace("\n", ",").replace("|", ",").split(","):
@@ -194,8 +174,8 @@ RARITY_TABLE = {
 	"very rare": {"dc": 24, "successes": 32},
 }
 
-# Two-hour cooldown
-COOLDOWN_SECONDS = 2 * 60 * 60
+# COOLDOWN_SECONDS = 2 * 60 * 60
+COOLDOWN_SECONDS = 10  # for testing
 
 # ---------------------------------------------------------------------------
 # Parse args
@@ -584,30 +564,6 @@ cd = cooldownlib.Cooldowns()
 cd_key = f"craft:{item_name.lower()}:{tool_name.lower()}:cd{COOLDOWN_SECONDS}"
 gate = cd.gate(cd_key, COOLDOWN_SECONDS, set_on_pass=False)
 
-# Also respect the shared `last_hunt` timestamp-based cooldown used by hunting.
-try:
-	import time
-	last_hunt_raw = ch.get_cvar("last_hunt", "")
-	try:
-		last_hunt_ts = int(last_hunt_raw) if last_hunt_raw else None
-	except:
-		last_hunt_ts = None
-	if last_hunt_ts is not None:
-		now_ts = int(time.time())
-		if last_hunt_ts + COOLDOWN_SECONDS > now_ts:
-			expiry = last_hunt_ts + COOLDOWN_SECONDS
-			when = cd.format_window(expiry)
-			return gatherlib.build_output(
-				"Craft Cooldown",
-				[
-					"You are still focusing on your previous crafting attempt.",
-					f"Try again {when}.",
-				],
-				footer=FOOTER,
-			)
-except:
-	pass
-
 if not gate.ok:
 	when = cd.format_window(gate.expiry)
 	return gatherlib.build_output(
@@ -770,7 +726,7 @@ if bonus_expr:
 	roll_total += bonus_roll.total
 	roll_breakdown = f"{roll_breakdown} + {bonus_roll}"
 
-check_method = f"{_title_words(selected_tool_variant)} ({craft_ability.upper()})"
+check_method = f"{selected_tool_variant.title()} ({craft_ability.upper()})"
 
 # ---------------------------------------------------------------------------
 # Check result
@@ -825,14 +781,6 @@ ch.set_cvar("craft_progress", dump_json(state))
 if success:
 	cd.gate(cd_key, COOLDOWN_SECONDS, set_on_pass=True)
 	cd.save()
-		# Also mirror this cooldown on the shared `last_hunt` cvar so crafting
-		# shares the same cooldown window as hunting. Store the last activation
-		# time as epoch seconds (not the expiry).
-		try:
-			import time
-			ch.set_cvar("last_hunt", str(int(time.time())))
-		except:
-			pass
 
 output_lines = [
 	f"{check_method}",
