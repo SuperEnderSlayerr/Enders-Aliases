@@ -174,8 +174,7 @@ RARITY_TABLE = {
 	"very rare": {"dc": 24, "successes": 32},
 }
 
-# COOLDOWN_SECONDS = 2 * 60 * 60
-COOLDOWN_SECONDS = 10  # for testing
+COOLDOWN_SECONDS = 2 * 60 * 60
 
 # ---------------------------------------------------------------------------
 # Parse args
@@ -190,6 +189,7 @@ except:
 prog_key = ""
 
 use_guidance = is_truthy_cvar(ch.get_cvar("craft_guidance_pref", ""))
+use_homunculi = is_truthy_cvar(ch.get_cvar("craft_homunculi_pref", ""))
 if not use_guidance:
 	for pref_cvar in ["tmine_guidance_pref", "lumber_guidance_pref", "herb_guidance_pref"]:
 		if is_truthy_cvar(ch.get_cvar(pref_cvar, "")):
@@ -204,6 +204,7 @@ if args and (args[0].lower() in ["help", "?"]):
 			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g] [-b <number|dice>]`",
 
 			"- `!craft set guidance on|off`",
+			"- `!craft set homunculi on|off`",
 			"- `!craft discard` or `!craft clear`",
 			"",
 			"**Inputs**",
@@ -214,6 +215,7 @@ if args and (args[0].lower() in ["help", "?"]):
 			"- `adv|dis`: optional advantage/disadvantage",
 			"- `g`: optional guidance",
 			"- `set guidance on|off`: save craft guidance preference",
+			"- `set homunculi on|off`: save Deryan's Helpful Homunculi preference",
 			"- `discard` or `clear`: abandon current project",
 			"- `-b <number|dice>`: optional bonus (e.g. `-b 2`, `-b d4`, `-b 2d4`)",
 		],
@@ -231,6 +233,7 @@ if args and args[0].lower() == "set":
 		]:
 			if (ch.get_cvar(cvar_name, "") or "").lower() in ["true", "1", "yes", "on"]:
 				active_guidance_sources.append(label)
+		active_homunculi = 'on' if (ch.get_cvar('craft_homunculi_pref', '') or '').lower() in ['true', '1', 'yes', 'on'] else 'off'
 
 		return gatherlib.build_output(
 			"Craft Settings",
@@ -238,25 +241,50 @@ if args and args[0].lower() == "set":
 				"**Usage**",
 				"- `!craft set guidance on`",
 				"- `!craft set guidance off`",
+				"- `!craft set homunculi on`",
+				"- `!craft set homunculi off`",
 				"",
 				"**Current Guidance**",
 				f"- Craft preference: {'on' if (ch.get_cvar('craft_guidance_pref', '') or '').lower() in ['true', '1', 'yes', 'on'] else 'off'}",
 				f"- Inherited from: {', '.join(active_guidance_sources) if active_guidance_sources else 'none'}",
+				f"- Helpful Homunculi: {active_homunculi}",
 			],
 			footer=FOOTER,
 		)
 
-	if len(args) < 3 or args[1].lower() != "guidance":
+	if len(args) < 3 or args[1].lower() not in ["guidance", "homunculi"]:
 		return gatherlib.build_output(
 			"Craft Error",
 			[
 				"Unknown set option.",
-				"Use `!craft set guidance on|off`.",
+				"Use `!craft set guidance on|off` or `!craft set homunculi on|off`.",
 			],
 			footer=FOOTER,
 		)
 
 	setting = args[2].lower()
+	if args[1].lower() == "homunculi":
+		if setting in ["on", "true", "yes", "enable", "enabled"]:
+			ch.set_cvar("craft_homunculi_pref", "true")
+			return gatherlib.build_output(
+				"Helpful Homunculi Preference Saved",
+				[
+					"Helpful Homunculi will now halve craft time.",
+					"Use `!craft set homunculi off` to clear this preference.",
+				],
+				footer=FOOTER,
+			)
+
+		if setting in ["off", "false", "no", "disable", "disabled", "clear"]:
+			ch.set_cvar("craft_homunculi_pref", "")
+			return gatherlib.build_output(
+				"Helpful Homunculi Cleared",
+				[
+					"Craft no longer halves time from Helpful Homunculi by default.",
+				],
+				footer=FOOTER,
+			)
+
 	if setting in ["on", "true", "yes", "enable", "enabled"]:
 		ch.set_cvar("craft_guidance_pref", "true")
 		return gatherlib.build_output(
@@ -280,10 +308,10 @@ if args and args[0].lower() == "set":
 		)
 
 	return gatherlib.build_output(
-		"Craft Error",
+		"Craft Settings Error",
 		[
-			"Guidance setting must be `on` or `off`.",
-			"Use `!craft set guidance on|off`.",
+			"Setting must be `on` or `off`.",
+			"Use `!craft set guidance on|off` or `!craft set homunculi on|off`.",
 		],
 		footer=FOOTER,
 	)
@@ -549,12 +577,21 @@ if "Adroit Crafter" in feats:
 	required = max(1, (required + 1) // 2)
 required_after_feat = required
 
+# Helpful Homunculi halves crafting time
+required_before_homunculi = required
+required_after_homunculi = required
+if use_homunculi:
+	required = max(1, (required + 1) // 2)
+	required_after_homunculi = required
+
 # Build human-readable reduction notes to show in the embed when applicable.
 reduction_notes = []
 if required_before_artificer != required_after_artificer:
 	reduction_notes.append(f"Magic Item Adept reduced required checks from {required_before_artificer} to {required_after_artificer}.")
 if required_before_feat != required_after_feat:
 	reduction_notes.append(f"Adroit Crafter feat reduced required checks from {required_before_feat} to {required_after_feat}.")
+if required_before_homunculi != required_after_homunculi:
+	reduction_notes.append(f"Helpful Homunculi reduced required checks from {required_before_homunculi} to {required_after_homunculi}.")
 
 # ---------------------------------------------------------------------------
 # Cooldown check
