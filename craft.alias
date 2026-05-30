@@ -4,7 +4,6 @@ embed
 # Inputs: !craft rarity p/c name tool adv g
 
 using(
-	cooldownlib = "cc413a98-489e-49f9-aac2-907993761792",
 	gatherlib = "6d152ad4-045e-4e48-92c4-820929143039",
 	gatherlib2 = "ba111c52-33c1-4933-a04c-a2c73bf086a2"
 )
@@ -175,6 +174,33 @@ RARITY_TABLE = {
 }
 
 COOLDOWN_SECONDS = 2 * 60 * 60
+
+def _format_cooldown_remaining(seconds_remaining):
+	seconds_remaining = max(0, int(seconds_remaining or 0))
+	hours = seconds_remaining // 3600
+	remainder = seconds_remaining - (hours * 3600)
+	minutes = remainder // 60
+	parts = []
+	if hours:
+		parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+	if minutes:
+		parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+	if not parts:
+		parts.append("less than a minute")
+	return "in " + " and ".join(parts)
+
+def _get_last_hunt_ts(ch):
+	raw_value = ""
+	try:
+		raw_value = ch.cvars.get("last_hunt", "")
+	except:
+		raw_value = ""
+	if not raw_value:
+		raw_value = ch.get_cvar("last_hunt", "")
+	try:
+		return float(raw_value) if raw_value else None
+	except:
+		return None
 
 # ---------------------------------------------------------------------------
 # Parse args
@@ -597,20 +623,23 @@ if required_before_homunculi != required_after_homunculi:
 # Cooldown check
 # ---------------------------------------------------------------------------
 
-cd = cooldownlib.Cooldowns()
-cd_key = f"craft:{item_name.lower()}:{tool_name.lower()}:cd{COOLDOWN_SECONDS}"
-gate = cd.gate(cd_key, COOLDOWN_SECONDS, set_on_pass=False)
-
-if not gate.ok:
-	when = cd.format_window(gate.expiry)
-	return gatherlib.build_output(
-		"Craft Cooldown",
-		[
-			"You are still focusing on your previous crafting attempt.",
-			f"Try again {when}.",
-		],
-		footer=FOOTER,
-	)
+try:
+	last_hunt_ts = _get_last_hunt_ts(ch)
+	if last_hunt_ts is not None:
+		now_ts = int(time())
+		if last_hunt_ts + COOLDOWN_SECONDS > now_ts:
+			expiry = last_hunt_ts + COOLDOWN_SECONDS
+			when = _format_cooldown_remaining(expiry - now_ts)
+			return gatherlib.build_output(
+				"Craft Cooldown",
+				[
+					"You are still focusing on your previous crafting attempt.",
+					f"Try again {when}.",
+				],
+				footer=FOOTER,
+			)
+except:
+	pass
 
 # ---------------------------------------------------------------------------
 # Load or initialize progress
@@ -814,10 +843,11 @@ if bonus_expr:
 state[prog_key] = prog
 ch.set_cvar("craft_progress", dump_json(state))
 
-# Only set cooldown and display after processing
-if success:
-	cd.gate(cd_key, COOLDOWN_SECONDS, set_on_pass=True)
-	cd.save()
+# Stamp the shared cooldown cvar after every craft attempt.
+try:
+	ch.set_cvar("last_hunt", str(int(time())))
+except:
+	pass
 
 output_lines = [
 	f"{check_method}",
@@ -846,7 +876,13 @@ if current_successes >= prog["required"]:
 	ch.set_cvar("craft_progress", dump_json({}))
 	ch.set_cc(CRAFT_SUCCESS_CC, 0)
 elif success:
-	output_lines.append(f"Ready for another check {cd.format_remaining(COOLDOWN_SECONDS)}.")
+	try:
+		now_ts = int(time())
+		last_hunt_ts = _get_last_hunt_ts(ch) or now_ts
+		expiry = last_hunt_ts + COOLDOWN_SECONDS
+		output_lines.append(f"Ready for another check {_format_cooldown_remaining(expiry - now_ts)}.")
+	except:
+		output_lines.append("Ready for another check soon.")
 
 return gatherlib.build_output(
 	f"Craft Check - {item_name}",
