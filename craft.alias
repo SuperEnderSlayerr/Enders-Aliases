@@ -193,6 +193,12 @@ def _craft_skill_from_name(ch, skill_name):
 		"display_name": ALLOWED_CRAFT_SKILLS[best_key],
 	}
 
+def _rogue_reliable_talent_applies(ch):
+	try:
+		return int(ch.levels.get("Rogue") or 0) >= 11
+	except:
+		return False
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -270,7 +276,7 @@ if args and (args[0].lower() in ["help", "?"]):
 			"- `p/c`: permanent or consumed (consumed halves required checks)",
 			"- `name`: item name (single token for now)",
 			"- `tool`: crafting tool, Arcana, or Medicine",
-			"- Accounts for the Adroit Crafter feat and Artificer Magic Item Adept reductions.",
+			"- Accounts for the Adroit Crafter feat, Artificer Magic Item Adept reductions, and Rogue Reliable Talent at 11 Rogue levels.",
 			"- `adv|dis`: optional advantage/disadvantage",
 			"- `g`: optional guidance",
 			"- `set guidance on|off`: save craft guidance preference",
@@ -746,12 +752,13 @@ skill_check = _craft_skill_from_name(ch, tool_name)
 selected_tool_variant = tool_name
 tool_tier = 0
 craft_ability = ""
+rogue_reliable_talent = _rogue_reliable_talent_applies(ch)
 
 if skill_check:
 	selected_skill = skill_check.get("skill")
 	selected_skill_name = skill_check.get("display_name") or tool_name.title()
 	base_adv = True if use_adv else False if use_dis else None
-	skill_core_expr = selected_skill.d20(base_adv=base_adv, mod_override=0)
+	skill_core_expr = selected_skill.d20(base_adv=base_adv, min_val=10 if rogue_reliable_talent and int(selected_skill.prof or 0) > 0 else None, mod_override=0)
 	d20_v = vroll(skill_core_expr)
 	mod_val = int(selected_skill.value)
 	guidance_val = 0
@@ -769,7 +776,7 @@ if skill_check:
 		roll_total += bonus_roll.total
 		roll_breakdown = f"{roll_breakdown} + {bonus_roll}"
 
-	check_method = selected_skill_name
+	check_method = f"{selected_skill_name} (min 10)" if rogue_reliable_talent and int(selected_skill.prof or 0) > 0 else selected_skill_name
 else:
 	# Resolve the closest matching stored tool name so partial inputs like
 	# "callig" can resolve to "Calligrapher's Tools" if the character has it.
@@ -820,6 +827,9 @@ else:
 	# To support natural 20 / natural 1 handling reliably, extract the d20
 	# portion separately by re-rolling the d20 core with the same adv/dis.
 	d20_v = vroll(_d20_core_expr(use_adv, use_dis))
+	d20_total = int(d20_v.total)
+	if rogue_reliable_talent and tool_tier > 0:
+		d20_total = max(10, d20_total)
 
 	# Compute deterministic modifiers (ability mod + proficiency/expertise)
 	mod_val = 0
@@ -848,8 +858,10 @@ else:
 		grv = vroll("1d4[guidance]")
 		guidance_val = grv.total
 
-	roll_total = d20_v.total + mod_val + prof_plus + guidance_val
+	roll_total = d20_total + mod_val + prof_plus + guidance_val
 	roll_breakdown = f"{d20_v} + {mod_val}[mod]"
+	if rogue_reliable_talent and tool_tier > 0 and d20_total != int(d20_v.total):
+		roll_breakdown = f"{roll_breakdown} [min 10]"
 	if prof_plus:
 		if tool_tier == 2:
 			roll_breakdown += f" + {pb}[proficiency] + {pb}[expertise]"
@@ -876,9 +888,13 @@ success = roll_total >= dc
 # - Natural 1 reduces successes by 1 (cannot go below 0).
 try:
 	d20_val = int(d20_v.total)
+	if rogue_reliable_talent:
+		d20_val = max(10, d20_val)
 except:
 	try:
 		d20_val = int(d20_v)
+		if rogue_reliable_talent:
+			d20_val = max(10, d20_val)
 	except:
 		d20_val = None
 added_success = 1 if success else 0
