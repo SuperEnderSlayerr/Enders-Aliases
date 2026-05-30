@@ -1,7 +1,7 @@
 embed
 <drac2>
 # !craft outline
-# Inputs: !craft rarity p/c name tool adv g
+# Inputs: !craft rarity p/c name tool/arcana/medicine adv g
 
 using(
 	gatherlib = "6d152ad4-045e-4e48-92c4-820929143039",
@@ -161,6 +161,38 @@ def _tool_tier_and_name_from_cvars(ch, tool_name, e_cvar="eTools", p_cvar="pTool
 
 	return {"tool": tool_name, "tier": 0, "score": 0}
 
+ALLOWED_CRAFT_SKILLS = {
+	"arcana": "Arcana",
+	"medicine": "Medicine",
+}
+
+def _craft_skill_from_name(ch, skill_name):
+	normalized = _norm_tool_name(skill_name)
+	best_key = ""
+	best_score = 0
+	for key, skill in ch.skills:
+		if key not in ALLOWED_CRAFT_SKILLS:
+			continue
+		display_name = ALLOWED_CRAFT_SKILLS[key]
+		score = max(_tool_match_score(normalized, key), _tool_match_score(normalized, display_name))
+		if score > best_score:
+			best_score = score
+			best_key = key
+	if best_score <= 0 or not best_key:
+		return None
+	skill = None
+	for key, candidate_skill in ch.skills:
+		if key == best_key:
+			skill = candidate_skill
+			break
+	if skill is None:
+		return None
+	return {
+		"skill": skill,
+		"skill_name": best_key,
+		"display_name": ALLOWED_CRAFT_SKILLS[best_key],
+	}
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -227,7 +259,7 @@ if args and (args[0].lower() in ["help", "?"]):
 		"Craft Help",
 		[
 			"**Usage**",
-			"- `!craft <rarity> <p|c> <name> <tool> [adv|dis] [g] [-b <number|dice>]`",
+			"- `!craft <rarity> <p|c> <name> <tool|arcana|medicine> [adv|dis] [g] [-b <number|dice>]`",
 
 			"- `!craft set guidance on|off`",
 			"- `!craft set homunculi on|off`",
@@ -237,7 +269,8 @@ if args and (args[0].lower() in ["help", "?"]):
 			"- `rarity`: nonmagical | common | uncommon | rare | very rare",
 			"- `p/c`: permanent or consumed (consumed halves required checks)",
 			"- `name`: item name (single token for now)",
-			"- `tool`: tool or skill name",
+			"- `tool`: crafting tool, Arcana, or Medicine",
+			"- Accounts for the Adroit Crafter feat and Artificer Magic Item Adept reductions.",
 			"- `adv|dis`: optional advantage/disadvantage",
 			"- `g`: optional guidance",
 			"- `set guidance on|off`: save craft guidance preference",
@@ -699,48 +732,9 @@ except:
 	pass
 
 # ---------------------------------------------------------------------------
-# Roll check using GatherLib extraction for the specified tool only
+# Roll check using GatherLib extraction for the specified tool or skill only
 # ---------------------------------------------------------------------------
 
-# Force a tool-only roll so no skill (including Arcana) can override.
-ability_keys = ["str", "dex", "con", "int", "wis"]
-ability_scores = []
-
-for a in ability_keys:
-	score_val = None
-	try:
-		score_val = int(getattr(ch.stats, a).value)
-	except:
-		try:
-			score_val = int(getattr(ch.stats, a).score)
-		except:
-			try:
-				score_val = int(ch.stats.get_mod(a))
-			except:
-				score_val = None
-
-	if score_val is not None:
-		ability_scores.append((score_val, a))
-
-craft_ability = max(ability_scores)[1] if ability_scores else "int"
-
-# Resolve the closest matching stored tool name so partial inputs like
-# "callig" can resolve to "Calligrapher's Tools" if the character has it.
-tool_match = _tool_tier_and_name_from_cvars(ch, tool_name)
-selected_tool_variant = tool_match.get("tool") or tool_name
-tool_tier = int(tool_match.get("tier", 0) or 0)
-
-tool_expr, base_roll = gatherlib.roll_tool_check_str(
-	ch,
-	tool_tier,
-	adv=use_adv,
-	dis=use_dis,
-	guidance=use_guidance,
-	ability=craft_ability
-)
-
-# To support natural 20 / natural 1 handling reliably, extract the d20
-# portion separately by re-rolling the d20 core with the same adv/dis.
 def _d20_core_expr(adv, dis):
 	if adv and not dis:
 		return "2d20kh1"
@@ -748,51 +742,128 @@ def _d20_core_expr(adv, dis):
 		return "2d20kl1"
 	return "1d20"
 
-d20_v = vroll(_d20_core_expr(use_adv, use_dis))
+skill_check = _craft_skill_from_name(ch, tool_name)
+selected_tool_variant = tool_name
+tool_tier = 0
+craft_ability = ""
 
-# Compute deterministic modifiers (ability mod + proficiency/expertise)
-mod_val = 0
-try:
-	mod_val = int(ch.stats.get_mod(craft_ability))
-except:
+if skill_check:
+	selected_skill = skill_check.get("skill")
+	selected_skill_name = skill_check.get("display_name") or tool_name.title()
+	base_adv = True if use_adv else False if use_dis else None
+	skill_core_expr = selected_skill.d20(base_adv=base_adv, mod_override=0)
+	d20_v = vroll(skill_core_expr)
+	mod_val = int(selected_skill.value)
+	guidance_val = 0
+	if use_guidance:
+		grv = vroll("1d4[guidance]")
+		guidance_val = grv.total
+
+	roll_total = d20_v.total + mod_val + guidance_val
+	roll_breakdown = f"{d20_v} + {mod_val}[{selected_skill_name.lower()}]"
+	if use_guidance:
+		roll_breakdown = f"{roll_breakdown} + {grv}"
+
+	if bonus_expr:
+		bonus_roll = vroll(bonus_expr)
+		roll_total += bonus_roll.total
+		roll_breakdown = f"{roll_breakdown} + {bonus_roll}"
+
+	check_method = selected_skill_name
+else:
+	# Resolve the closest matching stored tool name so partial inputs like
+	# "callig" can resolve to "Calligrapher's Tools" if the character has it.
+	tool_match = _tool_tier_and_name_from_cvars(ch, tool_name)
+	if int(tool_match.get("score", 0) or 0) <= 0:
+		return gatherlib.build_output(
+			"Craft Error",
+			[
+				f"Unknown crafting tool or skill: `{tool_name}`.",
+				"Use a crafting tool, `Arcana`, or `Medicine`.",
+			],
+			footer=FOOTER,
+		)
+
+	selected_tool_variant = tool_match.get("tool") or tool_name
+	tool_tier = int(tool_match.get("tier", 0) or 0)
+
+	ability_keys = ["str", "dex", "con", "int", "wis"]
+	ability_scores = []
+
+	for a in ability_keys:
+		score_val = None
+		try:
+			score_val = int(getattr(ch.stats, a).value)
+		except:
+			try:
+				score_val = int(getattr(ch.stats, a).score)
+			except:
+				try:
+					score_val = int(ch.stats.get_mod(a))
+				except:
+					score_val = None
+
+		if score_val is not None:
+			ability_scores.append((score_val, a))
+
+	craft_ability = max(ability_scores)[1] if ability_scores else "int"
+
+	tool_expr, base_roll = gatherlib.roll_tool_check_str(
+		ch,
+		tool_tier,
+		adv=use_adv,
+		dis=use_dis,
+		guidance=use_guidance,
+		ability=craft_ability
+	)
+
+	# To support natural 20 / natural 1 handling reliably, extract the d20
+	# portion separately by re-rolling the d20 core with the same adv/dis.
+	d20_v = vroll(_d20_core_expr(use_adv, use_dis))
+
+	# Compute deterministic modifiers (ability mod + proficiency/expertise)
+	mod_val = 0
 	try:
-		mod_val = int(getattr(ch.stats, craft_ability).mod)
+		mod_val = int(ch.stats.get_mod(craft_ability))
 	except:
-		mod_val = 0
+		try:
+			mod_val = int(getattr(ch.stats, craft_ability).mod)
+		except:
+			mod_val = 0
 
-pb = 0
-try:
-	pb = int(ch.stats.prof_bonus)
-except:
 	pb = 0
+	try:
+		pb = int(ch.stats.prof_bonus)
+	except:
+		pb = 0
 
-prof_plus = 0
-if tool_tier == 2:
-	prof_plus = pb * 2
-elif tool_tier == 1:
-	prof_plus = pb
-
-guidance_val = 0
-if use_guidance:
-	grv = vroll("1d4[guidance]")
-	guidance_val = grv.total
-
-roll_total = d20_v.total + mod_val + prof_plus + guidance_val
-roll_breakdown = f"{d20_v} + {mod_val}[mod]"
-if prof_plus:
+	prof_plus = 0
 	if tool_tier == 2:
-		roll_breakdown += f" + {pb}[proficiency] + {pb}[expertise]"
-	else:
-		roll_breakdown += f" + {pb}[proficiency]"
-if use_guidance:
-	roll_breakdown = f"{roll_breakdown} + {grv}"
+		prof_plus = pb * 2
+	elif tool_tier == 1:
+		prof_plus = pb
 
-if bonus_expr:
-	bonus_roll = vroll(bonus_expr)
-	roll_total += bonus_roll.total
-	roll_breakdown = f"{roll_breakdown} + {bonus_roll}"
+	guidance_val = 0
+	if use_guidance:
+		grv = vroll("1d4[guidance]")
+		guidance_val = grv.total
 
-check_method = f"{selected_tool_variant.title()} ({craft_ability.upper()})"
+	roll_total = d20_v.total + mod_val + prof_plus + guidance_val
+	roll_breakdown = f"{d20_v} + {mod_val}[mod]"
+	if prof_plus:
+		if tool_tier == 2:
+			roll_breakdown += f" + {pb}[proficiency] + {pb}[expertise]"
+		else:
+			roll_breakdown += f" + {pb}[proficiency]"
+	if use_guidance:
+		roll_breakdown = f"{roll_breakdown} + {grv}"
+
+	if bonus_expr:
+		bonus_roll = vroll(bonus_expr)
+		roll_total += bonus_roll.total
+		roll_breakdown = f"{roll_breakdown} + {bonus_roll}"
+
+	check_method = f"{selected_tool_variant.title()} ({craft_ability.upper()})"
 
 # ---------------------------------------------------------------------------
 # Check result
