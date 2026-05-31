@@ -166,6 +166,11 @@ ALLOWED_CRAFT_SKILLS = {
 	"medicine": "Medicine",
 }
 
+SKILL_ABILITIES = {
+	"arcana": "int",
+	"medicine": "wis",
+}
+
 def _craft_skill_from_name(ch, skill_name):
 	normalized = _norm_tool_name(skill_name)
 	best_key = ""
@@ -757,17 +762,59 @@ rogue_reliable_talent = _rogue_reliable_talent_applies(ch)
 if skill_check:
 	selected_skill = skill_check.get("skill")
 	selected_skill_name = skill_check.get("display_name") or tool_name.title()
-	base_adv = True if use_adv else False if use_dis else None
-	skill_core_expr = selected_skill.d20(base_adv=base_adv, min_val=10 if rogue_reliable_talent and int(selected_skill.prof or 0) > 0 else None, mod_override=0)
-	d20_v = vroll(skill_core_expr)
-	mod_val = int(selected_skill.value)
+	skill_key = skill_check.get("skill_name")
+	craft_ability = SKILL_ABILITIES.get(skill_key, "int")
+	
+	# Roll core d20 with advantage/disadvantage and optional min 10 floor
+	is_proficient = int(selected_skill.prof or 0) > 0
+	d20_core_expr = _d20_core_expr(use_adv, use_dis)
+	d20_v = vroll(d20_core_expr)
+	d20_total = int(d20_v.total)
+	if rogue_reliable_talent and is_proficient:
+		d20_total = max(10, d20_total)
+	
+	# Extract ability mod
+	ability_mod = 0
+	try:
+		ability_mod = int(ch.stats.get_mod(craft_ability))
+	except:
+		try:
+			ability_mod = int(getattr(ch.stats, craft_ability).mod)
+		except:
+			ability_mod = 0
+	
+	# Get proficiency bonus
+	pb = 0
+	try:
+		pb = int(ch.stats.prof_bonus)
+	except:
+		pb = 0
+	
+	# Determine proficiency/expertise
+	prof_plus = 0
+	prof_label = ""
+	if is_proficient:
+		# Check if expertise: skill_value should equal ability_mod + 2*prof_bonus
+		skill_value = int(selected_skill.value)
+		if skill_value == ability_mod + 2*pb:
+			prof_plus = 2*pb
+			prof_label = f" + {pb}[proficiency] + {pb}[expertise]"
+		else:
+			prof_plus = pb
+			prof_label = f" + {pb}[proficiency]"
+	
 	guidance_val = 0
 	if use_guidance:
 		grv = vroll("1d4[guidance]")
 		guidance_val = grv.total
 
-	roll_total = d20_v.total + mod_val + guidance_val
-	roll_breakdown = f"{d20_v} + {mod_val}[{selected_skill_name.lower()}]"
+	roll_total = d20_total + ability_mod + prof_plus + guidance_val
+	roll_breakdown = f"{d20_v}"
+	if rogue_reliable_talent and is_proficient and d20_total != int(d20_v.total):
+		roll_breakdown = f"{roll_breakdown} [min 10]"
+	roll_breakdown = f"{roll_breakdown} + {ability_mod}[{craft_ability.upper()}]"
+	if prof_plus:
+		roll_breakdown = f"{roll_breakdown}{prof_label}"
 	if use_guidance:
 		roll_breakdown = f"{roll_breakdown} + {grv}"
 
@@ -776,7 +823,8 @@ if skill_check:
 		roll_total += bonus_roll.total
 		roll_breakdown = f"{roll_breakdown} + {bonus_roll}"
 
-	check_method = f"{selected_skill_name} (min 10)" if rogue_reliable_talent and int(selected_skill.prof or 0) > 0 else selected_skill_name
+	roll_breakdown = f"{roll_breakdown} = {roll_total}"
+	check_method = selected_skill_name
 else:
 	# Resolve the closest matching stored tool name so partial inputs like
 	# "callig" can resolve to "Calligrapher's Tools" if the character has it.
@@ -859,9 +907,10 @@ else:
 		guidance_val = grv.total
 
 	roll_total = d20_total + mod_val + prof_plus + guidance_val
-	roll_breakdown = f"{d20_v} + {mod_val}[mod]"
+	roll_breakdown = f"{d20_v}"
 	if rogue_reliable_talent and tool_tier > 0 and d20_total != int(d20_v.total):
 		roll_breakdown = f"{roll_breakdown} [min 10]"
+	roll_breakdown = f"{roll_breakdown} + {mod_val}[mod]"
 	if prof_plus:
 		if tool_tier == 2:
 			roll_breakdown += f" + {pb}[proficiency] + {pb}[expertise]"
@@ -874,6 +923,8 @@ else:
 		bonus_roll = vroll(bonus_expr)
 		roll_total += bonus_roll.total
 		roll_breakdown = f"{roll_breakdown} + {bonus_roll}"
+
+	roll_breakdown = f"{roll_breakdown} = {roll_total}"
 
 	check_method = f"{selected_tool_variant.title()} ({craft_ability.upper()})"
 
